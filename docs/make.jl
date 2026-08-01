@@ -1,11 +1,12 @@
 using Documenter
 using ManyUI
+using ManyUITUI
 
-DocMeta.setdocmeta!(ManyUI, :DocTestSetup, :(using ManyUI);
-                    recursive = true)
+DocMeta.setdocmeta!(ManyUI, :DocTestSetup, :(using ManyUI); recursive = true)
+DocMeta.setdocmeta!(ManyUITUI, :DocTestSetup, :(using ManyUITUI); recursive = true)
 
 makedocs(;
-    modules = [ManyUI],
+    modules = [ManyUI, ManyUITUI],
     sitename = "ManyUI.jl",
     authors = "Sébastien Celles",
     format = Documenter.HTML(;

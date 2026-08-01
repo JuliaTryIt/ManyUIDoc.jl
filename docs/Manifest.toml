@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "986347367242a7d05912627aca98dd8c4aa44267"
+project_hash = "2a2d2c9838ab8241287be626f3ab19d75e61fdc1"
 
 [[deps.ANSIColoredPrinters]]
 git-tree-sha1 = "574baf8110975760d391c710b6341da1afa48d8c"
@@ -82,9 +82,9 @@ version = "3.7.1+0"
 
 [[deps.Git_jll]]
 deps = ["Artifacts", "Expat_jll", "JLLWrappers", "LibCURL_jll", "Libdl", "Libiconv_jll", "OpenSSL_jll", "PCRE2_jll", "Zlib_jll"]
-git-tree-sha1 = "0dd4cfb426924210c8f42742751cbde74b27bfa3"
+git-tree-sha1 = "7b16700f9e313c0d972d1222ede50a2076aa0770"
 uuid = "f8c6e375-362e-5223-8a59-34ff63f689eb"
-version = "2.54.0+0"
+version = "2.55.0+0"
 
 [[deps.IOCapture]]
 deps = ["Logging", "Random"]
@@ -179,8 +179,14 @@ version = "1.11.0"
 
 [[deps.ManyUI]]
 deps = ["DocStringExtensions", "InlineStrings", "REPL", "Unicode"]
-path = "/Users/scelles/git/github/s-celles/julia/ManyUI/ManyUI"
+path = "../../ManyUI"
 uuid = "4f14d67d-91c5-4d6b-929d-6ac291535b21"
+version = "0.1.0"
+
+[[deps.ManyUITUI]]
+deps = ["DocStringExtensions", "InlineStrings", "ManyUI", "REPL", "Unicode"]
+path = "../../ManyUITUI"
+uuid = "5c52c6f3-12e3-46fb-a0b2-3b2e56cfefb8"
 version = "0.1.0"
 
 [[deps.Markdown]]

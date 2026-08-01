@@ -23,13 +23,15 @@ jobs:
       - uses: julia-actions/cache@v3
       - name: Configure doc environment
         shell: julia --project=docs --color=yes {0}
+        env:
+          MANYUI_READ_TOKEN: ${{ secrets.MANYUI_READ_TOKEN }}
         run: |
           using Pkg
-          # docs/Manifest.toml is not committed, so the docs environment's
-          # path dep on this package (`path = ".."`) has to be
-          # re-established here rather than restored from the manifest.
+          token = get(ENV, "MANYUI_READ_TOKEN", "")
+          auth = isempty(token) ? "" : "$token@"
           Pkg.develop([
-              PackageSpec(path=pwd())
+              PackageSpec(url="https://$(auth)github.com/s-celles/ManyUI.jl.git"),
+              PackageSpec(url="https://$(auth)github.com/s-celles/ManyUITUI.jl.git")
           ])
           Pkg.instantiate()
       - name: Build documentation
