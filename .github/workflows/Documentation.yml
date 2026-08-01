@@ -21,17 +21,18 @@ jobs:
         with:
           version: '1.12'
       - uses: julia-actions/cache@v3
+      - name: Configure Git for dependencies
+        run: |
+          if [ -n "${{ secrets.MANYUI_READ_TOKEN }}" ]; then
+            git config --global url."https://x-access-token:${{ secrets.MANYUI_READ_TOKEN }}@github.com/".insteadOf "https://github.com/"
+          fi
       - name: Configure doc environment
         shell: julia --project=docs --color=yes {0}
-        env:
-          MANYUI_READ_TOKEN: ${{ secrets.MANYUI_READ_TOKEN }}
         run: |
           using Pkg
-          token = get(ENV, "MANYUI_READ_TOKEN", "")
-          auth = isempty(token) ? "" : "$token@"
           Pkg.develop([
-              PackageSpec(url="https://$(auth)github.com/s-celles/ManyUI.jl.git"),
-              PackageSpec(url="https://$(auth)github.com/s-celles/ManyUITUI.jl.git")
+              PackageSpec(url="https://github.com/s-celles/ManyUI.jl.git"),
+              PackageSpec(url="https://github.com/s-celles/ManyUITUI.jl.git")
           ])
           Pkg.instantiate()
       - name: Build documentation
