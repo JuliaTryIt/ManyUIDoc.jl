@@ -11,7 +11,7 @@ makedocs(;
     authors = "Sébastien Celles",
     format = Documenter.HTML(;
         prettyurls = get(ENV, "CI", "false") == "true",
-        canonical = "https://s-celles.github.io/ManyUI.jl",
+        canonical = "https://s-celles.github.io/ManyUIDoc.jl",
         # The aggregate search index grows with the library and is past the
         # 500 KiB soft default; raise its ceiling so a full API stays one
         # warning-free build. `size_threshold` gets headroom too.
@@ -52,6 +52,6 @@ makedocs(;
 )
 
 deploydocs(;
-    repo="github.com/s-celles/ManyUI.jl",
+    repo="github.com/s-celles/ManyUIDoc.jl",
     devbranch="main",
 )
