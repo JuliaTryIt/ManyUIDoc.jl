@@ -16,6 +16,8 @@
 !/README.md
 !/LICENSE
 !/CHANGELOG.md
+!/justfile
+!/Makefile
 
 # 4. The package (Not applicable here, but kept for consistency if src is added)
 !/Project.toml
