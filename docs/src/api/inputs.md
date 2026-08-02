@@ -23,7 +23,9 @@ Pages = ["widgets/form.jl"]
 A popup is a second root painted over the tree and hit-tested before it --
 the layer a [`DropDown`](@ref)'s list rides on. The `App` owns the one open
 popup; an owner opens it with `open_popup!` and is notified through
-`on_popup_close!`.
+`on_popup_close!`. Anchored controls use `BELOW`, `ABOVE`, or `AUTO` placement;
+modal dialogs use `PopupPlacement.CENTER` to ignore the owner geometry and
+center within the current viewport.
 
 ```@autodocs
 Modules = [ManyUI]
