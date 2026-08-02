@@ -62,11 +62,11 @@ close(h)      # ask it to stop
 wait(h)       # block until it has
 ```
 
-The handle's *type* is the backend's business — an `App` for a
-terminal, a `WebServer` for the web — but every handle answers those same
-three verbs, so code that starts and stops an app need not know which
-backend it got. A handle is **live when you get it**: `launch` does not
-return until the loop is actually up, so `isopen(h)` is true on the next
+The handle's *type* is the backend's business — an `App` for a terminal, a
+`WebServer` for WebTUI, or a `WebNativeServer` for WebNative — but every handle
+answers those same three verbs, so code that starts and stops an app need not
+know which backend it got. A handle is **live when you get it**: `launch` does
+not return until the loop is actually up, so `isopen(h)` is true on the next
 line and a `close` cannot race the loop into existence.
 
 ## Writing a backend
@@ -137,4 +137,3 @@ ManyUI.launch(CounterModel(0), TUI())
 ```
 
 ## Reference
-
