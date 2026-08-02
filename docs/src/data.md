@@ -59,10 +59,13 @@ Three rows of window, four items: it paints the three it can show.
 
 The cursor moves with the arrows, `home`/`end` and `pageup`/`pagedown`,
 scrolling itself into view as it goes, and the wheel scrolls the list.
-Clicking a row selects it. `on_activate` fires on `enter`:
+Clicking a row selects it. `on_change` fires when the cursor or selection
+moves, and `on_submit` fires on `enter`:
 
 ```julia
-List(["alpha", "beta"], w -> println("chose ", w.items[cursor_of(w)]))
+List(["alpha", "beta"],
+     w -> println("submitted ", w.items[row_cursor(w)]);
+     on_change = w -> println("selected row ", row_cursor(w)))
 ```
 
 Rows can be any type, with `format` doing the projection:

@@ -11,13 +11,15 @@ break makes them differ.
 
 ## TextInput
 
-A single-line field with a placeholder, a submit handler and a caret:
+A single-line field with a placeholder, change and submit handlers, and a
+caret:
 
 ```julia
 using ManyUI
 
 submitted = String[]
 field = TextInput("", i -> push!(submitted, i.text[]);
+                  on_change = i -> println("now: ", i.text[]),
                   placeholder = "name?", id = :name)
 apply_stylesheet!(STYLESHEET_EMPTY, field)
 layout!(field, Region(1, 1, 10, 1))

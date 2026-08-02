@@ -116,6 +116,31 @@ focus_next!(app)
 ManyUI.id(focused(app))
 ```
 
+## Callback names
+
+Interactive widgets use the same callback vocabulary on every backend:
+
+| Callback | Meaning |
+|:--|:--|
+| `on_click` | a `Button` was activated |
+| `on_change` | a value, cursor, or selection changed |
+| `on_submit` | the current value or selection was submitted |
+| `on_focus` | the widget gained focus |
+| `on_blur` | the widget lost focus |
+
+`List`, `Table`, `DataTable`, and `TreeView` fire `on_change` only when
+their cursor or selection really moves. Pressing `enter` fires
+`on_submit`; it does not manufacture a second change.
+
+Focus callbacks live on every widget's `WidgetNode`, so they also work for
+widgets with specialized focus rendering:
+
+```julia
+field = TextInput()
+node(field).on_focus = w -> println("entered ", id(w))
+node(field).on_blur = w -> println("left ", id(w))
+```
+
 ## Where events come from
 
 Events are parsed from a byte stream by `InputParser`, which is

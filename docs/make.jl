@@ -12,6 +12,8 @@ makedocs(;
     format = Documenter.HTML(;
         prettyurls = get(ENV, "CI", "false") == "true",
         canonical = "https://s-celles.github.io/ManyUIDoc.jl",
+        edit_link = "main",
+        inventory_version = "0.1",
         # The aggregate search index grows with the library and is past the
         # 500 KiB soft default; raise its ceiling so a full API stays one
         # warning-free build. `size_threshold` gets headroom too.
@@ -51,7 +53,9 @@ makedocs(;
     warnonly = false,
 )
 
-deploydocs(;
-    repo="github.com/s-celles/ManyUIDoc.jl",
-    devbranch="main",
-)
+if get(ENV, "CI", "false") == "true"
+    deploydocs(;
+        repo = "github.com/s-celles/ManyUIDoc.jl",
+        devbranch = "main",
+    )
+end
