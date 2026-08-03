@@ -18,9 +18,13 @@ The ecosystem is extended by companion packages that provide different rendering
 3. **[ManyUIWeb.jl](https://github.com/s-celles/ManyUIWeb.jl)**
    - *WebTerminal*: Serve your TUI application over the web. The terminal is emulated in the browser via WebSockets.
    - *WebNative*: Translate the exact same widget tree into native HTML and DOM elements for a true semantic web experience.
-4. **[ManyUICLI.jl](https://github.com/s-celles/ManyUICLI.jl)**
+4. **[ManyUICImGui.jl](https://github.com/s-celles/ManyUICImGui.jl)**
+   Dear ImGui desktop projection. It is currently in development; the package
+   already provides a headless driver contract and an optional GLFW/OpenGL3
+   window seam. See its [parity roadmap](https://github.com/s-celles/ManyUICImGui.jl/blob/main/ROADMAP.md).
+5. **[ManyUICLI.jl](https://github.com/s-celles/ManyUICLI.jl)**
    Automatically generate a Command-Line Interface from your declarative UI model using `Comonicon.jl`.
-5. **[ManyUIDemos.jl](https://github.com/s-celles/ManyUIDemos.jl)**
+6. **[ManyUIDemos.jl](https://github.com/s-celles/ManyUIDemos.jl)**
    A centralized demonstration hub showcasing how to write a domain model once and launch it across all `ManyUI` projections.
 
 ```@docs

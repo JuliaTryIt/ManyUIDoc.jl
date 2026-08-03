@@ -136,4 +136,27 @@ end
 ManyUI.launch(CounterModel(0), TUI())
 ```
 
+## ManyUICImGui (Dear ImGui desktop backend)
+
+**ManyUICImGui.jl** is the desktop projection under development. It keeps the
+ManyUI widget/model and canonical event contracts while using Dear ImGui for
+native rendering. Its headless driver is available without graphical system
+libraries, so backend and event tests can run in CI.
+
+The optional native window seam currently uses CImGui's GLFW/OpenGL3 backend:
+
+```julia
+using Pkg
+Pkg.add(["ManyUICImGui", "CImGui", "GLFW", "ModernGL"])
+
+using ManyUI, ManyUICImGui
+
+ui() = Container(Label("Hello from ManyUI"))
+ManyUICImGui.launch_manyui(ui; width=900, height=600)
+```
+
+The initial projection covers `Container`, `Label`, `Static` and `Button`.
+Widget, layout, event, theme and animation parity is tracked in the
+[ManyUICImGui roadmap](https://github.com/s-celles/ManyUICImGui.jl/blob/main/ROADMAP.md).
+
 ## Reference
