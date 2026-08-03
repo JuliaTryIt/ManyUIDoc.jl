@@ -29,6 +29,23 @@ Nothing else moves. `config` and `stylesheet` describe the **app**, so they
 are spelled the same way whatever the target; a port or a tty describes the
 **target**, so it lives on the backend.
 
+## Capability discovery
+
+Applications that offer more than one target can inspect a backend without
+starting it:
+
+```julia
+ManyUI.backend_available(backend)
+ManyUI.backend_kind(backend)
+ManyUI.backend_capabilities(backend)
+```
+
+The common capability fields are `mouse`, `keyboard`, `text_input`, `focus`,
+`resize`, `transparency`, `animations`, `native_window`, `gpu` and
+`multi_session`. For example, an ImGui launcher can hide its native option
+when `backend_available(ImGuiBackend())` is false because CImGui is not
+installed, while WebTUI and WebNative can advertise their own feature sets.
+
 ## Why a factory
 
 `launch` takes `() -> Widget` — a function that builds a tree — not a tree:
