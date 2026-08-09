@@ -34,3 +34,11 @@ Pages = ["widgets/tree.jl"]
 Modules = [ManyUI]
 Pages = ["widgets/splitter.jl"]
 ```
+
+## Readouts
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["widgets/sparkline.jl", "widgets/statusbar.jl",
+         "widgets/progressbar.jl"]
+```

@@ -237,6 +237,64 @@ The buffer's `(1, 1)` is the content origin, and its size is the
 content box — so a widget cannot paint outside its own region, and
 `type_name` makes it addressable from CSS as `Spinner { ... }`.
 
+## Readouts
+
+Three widgets for showing a number without spending a node on each part
+of it.
+
+### Sparkline
+
+A one-row plot, one cell per sample:
+
+```julia
+using ManyUI
+
+sp = Sparkline([1, 3, 2, 5, 4]; cap = 240)
+push_value!(sp, 6)
+(n_values(sp), spark_bounds(sp))
+```
+
+The series is *data*, not a widget per point — the same seam `List` and
+the table widgets use. A 10 000-sample series is one node, and a frame
+costs the width of the widget rather than the length of the series,
+because only the last `width` samples can be on screen. New data
+arrives on the right; the oldest scrolls off the left. `cap` bounds a
+live series so it cannot grow without limit.
+
+`lo` and `hi` fix the scale, and fixing it is the point: auto-scaling
+redraws the same series differently the moment one outlier arrives,
+which is exactly when a reader most needs the picture to hold still. A
+value outside a fixed scale is pinned to the end it overshot rather
+than dropped.
+
+### StatusBar
+
+```julia
+bar = StatusBar(; left = "server :2828",
+                  center = RichText("running", Style(fg = rgb(0, 200, 0))),
+                  right = "[q]uit")
+status_layout(bar, 60)
+```
+
+Three segments on one row. It is a widget rather than three `Static`s
+in a flex row for one reason: **what it drops when it does not fit**.
+Flex would shrink all three and leave three half-truncated fragments. A
+`StatusBar` drops the centre first, then the right, and truncates the
+left only when it is alone and still too wide — the left segment is
+where an application puts its identity, so it is the one that survives.
+`status_layout` is pure, so you can test the rule without a buffer.
+
+### A labelled ProgressBar is a gauge
+
+```julia
+ProgressBar(0.62; label = "62% — 1.4 GB/s")
+```
+
+A field rather than a second widget, because a `Gauge` would differ
+from a `ProgressBar` by exactly that one. A labelled bar cannot use the
+block glyphs — text written over `█` is unreadable — so it fills with a
+reversed span, which keeps the boundary legible *through* the caption.
+
 ## Modal dialogs
 
 A popup is already a second root painted over the tree and hit-tested
