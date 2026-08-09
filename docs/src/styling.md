@@ -250,3 +250,39 @@ buf = Buffer(8, 1)
 write_richtext!(buf, 1, 1, caption)
 string(buf)
 ```
+
+## Border captions
+
+A caption on a frame is not content and takes no content row — it is
+painted *on* the border. A widget cannot do that itself: `render!` is
+handed the content box, and the border is outside it. So captions are a
+seam the paint pass asks about:
+
+```julia
+using ManyUI
+
+border_title(Container())            # empty by default
+border_title(Container(; title = "Server Log"))
+```
+
+`Container` ships with `title` and `title_align`; override
+`border_title` and `border_title_align` and any widget gains one.
+
+```julia
+Container(Label("body");
+          title = RichText(TextRun("!", Style(fg = rgb(255, 0, 0))),
+                           TextRun(" Server Log")),
+          title_align = Align.CENTER)
+```
+
+Two rules are worth knowing before you rely on them. A caption **never
+touches a corner**: it may use the top edge less one glyph at each end
+and less its two pad cells, is truncated to whatever that leaves, and
+is dropped entirely on a box too narrow to hold one — the frame is what
+must survive. And each run folds over the *border's* style, not the
+widget's, so an unstyled caption matches the line it sits on rather
+than resetting against it.
+
+Setting a caption is `Dirty.PAINT`, never `Dirty.LAYOUT`: the border
+row it lands on exists whether or not anything is written on it, so a
+new caption cannot move the widget or its siblings.
