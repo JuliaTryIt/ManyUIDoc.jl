@@ -359,3 +359,42 @@ The same discipline runs all the way down: byte indices and cluster
 indices meet in exactly one place, a small set of shared helpers that
 `TextInput` defines and `TextArea` uses, so the two cannot drift apart —
 and no widget code indexes a user's string by byte.
+
+## Code, with highlighting
+
+`CodeEditor` is **not** a new widget type. It is a `TextArea` with a
+`highlight` field set, so every editing verb still applies — it *is*
+one:
+
+```julia
+using ManyUI
+
+e = CodeEditor("function f(x)\n    return x + 1\nend")
+length(code_lines(e))
+```
+
+`language = :julia` is the default and `:none` gives a plain
+`TextArea`; pass `highlight` for your own. A highlighter takes the
+**whole source** and returns one `RichText` per line.
+
+### Why whole-document
+
+Because a line is not a lexical unit. A triple-quoted string means line
+40 is only classifiable given lines 1 to 39, so a per-line highlighter
+colours the inside of a string as code. The result is cached against
+`TextArea.version`, which every edit already bumps — a keystroke costs
+one relex of the document, and a frame costs none.
+
+### Two behaviours worth relying on
+
+**Unlexable text is drawn plain, never refused.** Text under a cursor
+is invalid most of the time it is being typed; an editor that stopped
+drawing then would be unusable.
+
+**An unknown face is invisible, not wrong.** `CODE_FACES` maps a
+highlighter face to a themed style, and anything not named there falls
+back to the widget's own style.
+
+The built-in Julia highlighter uses the `JuliaSyntaxHighlighting`
+stdlib, so the lexer is the one Julia itself ships and ManyUI owns no
+tokeniser of its own.

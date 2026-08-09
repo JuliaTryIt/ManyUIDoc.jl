@@ -31,3 +31,10 @@ center within the current viewport.
 Modules = [ManyUI]
 Pages = ["widgets/popup.jl", "popup_ops.jl"]
 ```
+
+## Code editor
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["widgets/codeeditor.jl"]
+```
