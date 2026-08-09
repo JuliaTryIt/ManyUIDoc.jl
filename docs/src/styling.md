@@ -213,6 +213,30 @@ cluster that does not fit rather than skipping it, so a wide cluster
 refused at the right edge never lets a narrow run behind it slide
 forward into the freed cell.
 
+### In the row widgets
+
+A `List`'s `format`, a `Table`'s or `DataTable`'s `cell`, and a tab
+caption all accept `TextLike` — either spelling. Nothing converts
+eagerly, so the ordinary plain-string case allocates nothing extra:
+
+```julia
+warn = Style(fg = rgb(255, 0, 0))
+level = r -> RichText(TextRun(String(r[1]),
+                              r[1] === :error ? warn : STYLE_NONE),
+                      TextRun(" " * r[2]))
+
+log = List([(:error, "disk full"), (:info, "ok")]; format = level)
+n_rows(log)
+```
+
+This is the case that motivated the primitive. A log list colouring
+only its level column, or a tab strip with the shortcut key in a
+warning colour, would otherwise need one widget per styled fragment —
+three nodes on every tab, one per log row.
+
+Column widths, truncation and the ellipsis marker behave exactly as
+they do for plain cells, because they are decided on the text.
+
 ### Painting one
 
 Backends paint a `RichText` through `write_richtext!`, which folds each
