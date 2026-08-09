@@ -2,5 +2,5 @@
 
 ```@autodocs
 Modules = [ManyUI]
-Pages = ["color.jl", "style.jl", "css.jl"]
+Pages = ["color.jl", "style.jl", "richtext.jl", "css.jl"]
 ```

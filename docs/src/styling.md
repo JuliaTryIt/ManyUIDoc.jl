@@ -138,3 +138,91 @@ s = with(STYLE_NONE, Attr.BOLD, true)
 
 Styles merge with the child winning wherever it specifies something —
 the same rule the cascade itself is built from.
+
+## Rich text
+
+The cascade styles *nodes*. Some styled things are not nodes: the key
+in a tab caption, the level in a log line, the units in a status
+readout. Making each of those a widget would put three nodes on a tab
+strip and one per log row.
+
+`RichText` is one line whose style varies along it — a sequence of
+`TextRun`s, each carrying an override:
+
+```julia
+using ManyUI
+
+warn = Style(fg = rgb(255, 200, 0), bold = true)
+caption = RichText(TextRun("1", warn), TextRun(" Server"))
+
+(plain(caption), text_width(caption))
+```
+
+`Label` and `Static` accept one wherever they accept a string, and a
+string converts implicitly, so nothing about the existing spelling
+changes:
+
+```julia
+l = Label(caption)
+l.text[] = "back to plain"      # still a valid assignment
+plain(l.text[])
+```
+
+### A run is a difference, not an appearance
+
+A run's style is folded over the painting widget's computed style with
+`merge` — the cascade's own monoid. So `STYLE_NONE`, the default, means
+*exactly the widget's style*, and a run naming only `bold` keeps the
+widget's colours:
+
+```julia
+base = Style(fg = rgb(0, 255, 0), bg = rgb(0, 0, 0))
+got = merge(base, Style(bold = true))
+
+(fg = got.fg == rgb(0, 255, 0), bg = got.bg == rgb(0, 0, 0),
+ bold = has(got, Attr.BOLD))
+```
+
+That is what lets one `RichText` be built once and painted under a
+light and a dark theme without being rebuilt. Runs that specify an
+absolute colour still work — they simply stop tracking the theme.
+
+### Styling never moves a break
+
+`text_width`, `truncate_width` and `wrap_width` all accept a
+`RichText`. Wrapping runs the *plain* text through the ordinary string
+wrap and reattaches the styling afterwards, which makes one property
+true by construction:
+
+```julia
+rt = RichText(TextRun("the quick ", Style(bold = true)),
+              TextRun("brown fox jumps"))
+
+plain.(wrap_width(rt, 12)) == wrap_width(plain(rt), 12)
+```
+
+Colouring a paragraph cannot reflow it. A second wrap implemented over
+styled runs would have to be kept in step with the first forever to
+promise that; there is only one wrap.
+
+Two details follow from the same reasoning. A joining space inherits
+the style of the whitespace run it replaces, because that cell still
+has a background and resetting it would leave a hole in a highlighted
+line. And `truncate_width` yields a *prefix*: it stops at the first
+cluster that does not fit rather than skipping it, so a wide cluster
+refused at the right edge never lets a narrow run behind it slide
+forward into the freed cell.
+
+### Painting one
+
+Backends paint a `RichText` through `write_richtext!`, which folds each
+run over the widget's style and stops at the first run the edge cut
+short:
+
+```julia
+using ManyUITUI
+
+buf = Buffer(8, 1)
+write_richtext!(buf, 1, 1, caption)
+string(buf)
+```
