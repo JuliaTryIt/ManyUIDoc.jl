@@ -284,6 +284,29 @@ left only when it is alone and still too wide — the left segment is
 where an application puts its identity, so it is the one that survives.
 `status_layout` is pure, so you can test the rule without a buffer.
 
+### ProgressList
+
+A column of captioned bars:
+
+```julia
+pl = ProgressList([ProgressItem("build", 0.4),
+                   ProgressItem("test", 0.9)])
+set_progress!(pl, 1, 0.75)
+(n_items(pl), pl_label_width(pl))
+```
+
+A row is *not* a widget — the seam `List` and the table widgets already
+take. A hundred tasks are a `Vector` of a hundred items and one node;
+composing this out of a hundred `ProgressBar`s would put a hundred
+nodes on the tree to show a hundred numbers. It overrides
+`content_extent`, so a `Scrollbar` reports on it with no new code.
+
+The label column's `AUTO` width measures *every* item, unlike a table's
+`AUTO` column, which samples. The costs differ: a caption is short and
+a progress list is a handful of rows, where a table guards against a
+hundred thousand. Sampling here would let the column change width as
+the list scrolled, and every bar would jump sideways.
+
 ### A labelled ProgressBar is a gauge
 
 ```julia
@@ -331,6 +354,32 @@ about `modal` and not merely about there being a popup.
 
 Opening a modal moves focus into it and closing puts it back where it
 was, provided that widget is still in the tree.
+
+### Dialog
+
+`Dialog` is **not** a new widget type. A dialog is a captioned
+`Container` holding a message and a row of buttons, and every part of
+that already exists:
+
+```julia
+msg = "Discard changes?"
+d = Dialog(msg; title = "Confirm",
+           buttons = ["OK"     => (_ -> close_popup!(app, owner)),
+                      "Cancel" => (_ -> close_popup!(app, owner))])
+
+open_popup!(app, Popup(d, owner, dialog_size(msg; title = "Confirm");
+                       placement = PopupPlacement.CENTER, modal = true))
+```
+
+What did not already exist is the arrangement and the *size* — the
+popup layer takes a declared size rather than measuring its content, so
+guessing one line for a long question shows as a clipped one.
+`dialog_size` wraps the message to the width it settles on and reports
+the height it will actually need.
+
+Modality is not part of `Dialog` either. `Popup(...; modal = true)`
+supplies it, because it is a property of the layer, not of what is on
+it.
 
 ### Dimming
 

@@ -40,5 +40,6 @@ Pages = ["widgets/splitter.jl"]
 ```@autodocs
 Modules = [ManyUI]
 Pages = ["widgets/sparkline.jl", "widgets/statusbar.jl",
-         "widgets/progressbar.jl"]
+         "widgets/progressbar.jl", "widgets/progresslist.jl",
+         "widgets/dialog.jl"]
 ```
