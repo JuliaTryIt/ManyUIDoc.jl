@@ -286,3 +286,72 @@ than resetting against it.
 Setting a caption is `Dirty.PAINT`, never `Dirty.LAYOUT`: the border
 row it lands on exists whether or not anything is written on it, so a
 new caption cannot move the widget or its siblings.
+
+## Themes
+
+The cascade can say what colour a widget is. What it cannot say is what
+`warning` *means* — that answer belongs to the whole application and
+changes when the user picks a different palette. Tokens are the seam:
+
+```julia
+using ManyUI
+
+token(:warning)                       # a Color, but a NAMED one
+theme_color(theme(:dark), :warning)   # what it means under :dark
+theme_color(theme(:light), :warning)  # ... and under :light
+```
+
+Name one from CSS with `var(--name)`:
+
+```julia
+sheet = parse_css("""
+    Container { background: var(--bg); border: solid; }
+    Label     { color: var(--text); }
+    .alert    { color: var(--error); }
+""")
+```
+
+### A token becomes a colour at emission
+
+This is the whole design, and everything useful follows from it. A
+token survives parsing, survives the cascade, survives `merge`, and
+survives sitting inside a `TextRun`. It is looked up once, at the point
+a colour meets a device — `color_seq!` on the terminal, `_css_color` on
+the web.
+
+So:
+
+- one parsed stylesheet serves every theme;
+- a `RichText` naming `var(--warning)` is built once and is correct
+  under every theme, instead of being frozen to whichever palette was
+  current when it was built;
+- `set_theme!` needs neither a re-cascade nor a re-parse.
+
+```julia
+before = theme()
+set_theme!(:light)
+resolve_token(token(:accent))    # the light accent
+set_theme!(before)
+```
+
+!!! note "A swap needs a repaint"
+    Because nothing in the tree holds a resolved colour, nothing in the
+    tree becomes dirty when the theme changes. The frame diff compares
+    cells, and the cells did not change — so it will not find the swap
+    on its own. Follow `set_theme!` with a full repaint (`refresh!` on
+    the terminal backend).
+
+### Defining your own
+
+A theme need not be total. A token it does not name falls back to the
+colour declared when the token was registered, so a theme that cares
+about three colours is three entries long and still safe:
+
+```julia
+register_theme!(Theme(:solar, Dict(:accent => rgb(0xb58900),
+                                   :bg => rgb(0x002b36))))
+:solar in themes()
+```
+
+`register_token!(:brand, rgb(0x00a0a0))` adds a token of your own, with
+the fallback every theme that ignores it will use.
