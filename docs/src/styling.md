@@ -139,6 +139,39 @@ s = with(STYLE_NONE, Attr.BOLD, true)
 Styles merge with the child winning wherever it specifies something —
 the same rule the cascade itself is built from.
 
+## Focus rings
+
+`:focus` matches the node that holds focus; `:focus-within` matches it
+*and every ancestor*. Together they turn a focus ring from a branch in
+every widget's `render!` into one stylesheet rule:
+
+```julia
+parse_css("""
+    .pane              { border: solid #303030; }
+    .pane:focus-within { border: solid #00ffff; }
+    Button:focus       { text-style: reverse; }
+""")
+```
+
+`:focus-within` is the one that matters for panes. Focus lands on a
+table *inside* a pane, and it is the pane that must light up — so the
+selector has to be about the ancestor, not the focused widget.
+
+They read two flags on `WidgetNode`, `focused` and `focus_within`,
+which `focus!` maintains along one chain from the focused node to the
+root. Stored rather than computed, deliberately: the cascade asks the
+question of every node against every rule, so answering `focus-within`
+by walking descendants would make one focus change cost the *size* of
+the tree, where maintaining the chain costs its *depth*.
+
+`focus!` also marks each node on that chain `Dirty.STYLE`, so the next
+`recascade!` re-runs the rules that read them and the ring follows TAB
+with nothing else wired up.
+
+A pseudo-class ranks with a class, exactly as in CSS — `Button:focus`
+beats `Button` and loses to `#ok`. An unknown one is a `CssParseError`
+with a position rather than a selector that silently never matches.
+
 ## Rich text
 
 The cascade styles *nodes*. Some styled things are not nodes: the key
