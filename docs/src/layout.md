@@ -116,3 +116,51 @@ and touches nothing. `apply_layout!` writes such a map into the tree,
 and `layout!` is the two composed. `relayout!` is the incremental form
 the frame loop actually uses — it recomputes only the dirty subtree,
 anchored at its existing margin box.
+
+## Splitters
+
+A `Splitter` is a row or column of panes with a draggable handle
+between each pair:
+
+```julia
+using ManyUI
+
+sp = Splitter(Label("left"), Label("right"); weights = [3, 1])
+(pane_count(sp), length(handles(sp)), weights_of(sp))
+```
+
+`weights` are ratios — `[1, 1]` and `[3, 3]` describe the same split —
+and they *are* the panes' `grow`, so the ordinary flex pass distributes
+the space and the splitter only ever rewrites two numbers. Read them
+back with `weights_of` and set them with `set_weights!`.
+
+The handles are children too, interleaved `pane, handle, pane`. Use
+`panes(sp)` and `handles(sp)` rather than indexing `children` and
+counting in twos; `mount!` on a `Splitter` throws, because a stray
+child would shift the parity and turn a pane into a handle.
+
+### Why a handle is a widget
+
+Because then nothing about it is special. It is hit-tested, painted and
+laid out by machinery that already exists — no table of rectangles kept
+on the side, no painting over a neighbour's border.
+
+The one thing a handle cannot do for itself is follow a drag: a pointer
+that outruns the redraw leaves the one-cell handle, and the next event
+lands on a pane. So the *splitter* consumes drags, in the capture
+phase, while one of its handles is down. Capture runs root-first, so
+the splitter sees the event before the pane the pointer strayed onto —
+pointer capture out of the propagation order that already exists.
+
+A drag moves only the two panes it is between: their `grow` total is
+preserved, so a third pane never shifts under a resize it had nothing
+to do with. Both ends are clamped, so dragging past the edge cannot
+invert them.
+
+```julia
+Splitter(Label("top"), Label("bottom");
+         direction = Direction.COLUMN,
+         on_resize = sp -> @info "now $(weights_of(sp))")
+```
+
+`on_resize` fires once per actual change, not once per mouse event.

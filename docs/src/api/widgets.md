@@ -27,3 +27,10 @@ Modules = [ManyUI]
 Pages = ["widgets/tree.jl"]
 ```
 
+
+## Splitter
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["widgets/splitter.jl"]
+```
