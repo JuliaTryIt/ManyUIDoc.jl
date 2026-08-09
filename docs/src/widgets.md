@@ -236,3 +236,47 @@ wants, and `render!`, which paints into the content box it was granted.
 The buffer's `(1, 1)` is the content origin, and its size is the
 content box — so a widget cannot paint outside its own region, and
 `type_name` makes it addressable from CSS as `Spinner { ... }`.
+
+## Modal dialogs
+
+A popup is already a second root painted over the tree and hit-tested
+before it. `modal = true` is what turns one into a dialog:
+
+```julia
+using ManyUI, ManyUITUI
+
+content = Container(Button("OK", _ -> nothing),
+                    Button("Cancel", _ -> nothing);
+                    title = "Discard changes?")
+
+open_popup!(app, Popup(content, owner, Size(30, 5);
+                       placement = PopupPlacement.CENTER,
+                       modal = true))
+```
+
+What makes it modal is not its size or its placement — it is that the
+user cannot walk around the question. Three things, and each is a way
+out that had to be closed:
+
+- **A press outside does not dismiss it.** The popup layer dismisses an
+  ordinary popup on exactly that press, so this is carved out of it. A
+  dialog the application cannot proceed without must not be answerable
+  by clicking next to it.
+- **TAB does not leave it.** `focus_root(app)` returns the modal's
+  content instead of the tree, so the tab order is the dialog's.
+- **A keystroke does not reach the tree behind it.** The same root is
+  used to dispatch keys.
+
+A non-modal popup keeps all three behaviours of the tree — a `DropDown`
+holds focus itself and forwards to its list, which is why the trap asks
+about `modal` and not merely about there being a popup.
+
+Opening a modal moves focus into it and closing puts it back where it
+was, provided that widget is still in the tree.
+
+### Dimming
+
+A modal dims everything it covers before painting itself. `Attr.DIM`
+and not an opaque fill, deliberately: dimming keeps the tree readable
+underneath, which is what tells the user the application is still there
+and merely waiting. A fill would say it had gone.
