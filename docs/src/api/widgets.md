@@ -41,5 +41,5 @@ Pages = ["widgets/splitter.jl"]
 Modules = [ManyUI]
 Pages = ["widgets/sparkline.jl", "widgets/statusbar.jl",
          "widgets/progressbar.jl", "widgets/progresslist.jl",
-         "widgets/dialog.jl"]
+         "widgets/dialog.jl", "widgets/markdownpane.jl"]
 ```

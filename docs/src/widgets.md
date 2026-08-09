@@ -318,6 +318,44 @@ from a `ProgressBar` by exactly that one. A labelled bar cannot use the
 block glyphs — text written over `█` is unreadable — so it fills with a
 reversed span, which keeps the boundary legible *through* the caption.
 
+## Markdown
+
+```julia
+using ManyUI
+
+pane = MarkdownPane("""
+    # Title
+
+    Some **bold** text and `code`.
+
+    - one
+    - two
+    """)
+length(md_lines(pane, 40))
+```
+
+The document is parsed by the `Markdown` stdlib; this widget only
+*projects* it — AST to a `Vector{RichText}`. That projection is the
+whole reason rich text had to come first: a heading is not a widget, a
+bold run is not a widget, and a document is not a subtree. It is lines,
+held as data, in one node.
+
+The heading, code, quote and link styles name theme tokens, so a
+document tracks the palette instead of being rebuilt for it. A link
+renders its *text*, never its URL — a pane is for reading.
+
+### Two things worth knowing
+
+**The line cache is keyed on the width.** Everything about a rendered
+document depends on where it wraps, so `md_lines(pane, w)` rebuilds
+when `w` changes and returns the same vector when it does not.
+Rebuilding unconditionally would reflow the whole document once a
+frame; not rebuilding would show the previous box's breaks in the new
+one.
+
+**A code block is never wrapped.** A broken line of code is a different
+line of code, so it is left long and the pane scrolls sideways instead.
+
 ## Modal dialogs
 
 A popup is already a second root painted over the tree and hit-tested
