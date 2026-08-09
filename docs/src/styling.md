@@ -388,3 +388,36 @@ register_theme!(Theme(:solar, Dict(:accent => rgb(0xb58900),
 
 `register_token!(:brand, rgb(0x00a0a0))` adds a token of your own, with
 the fallback every theme that ignores it will use.
+
+## Remembering a theme
+
+`ManyUITUI` persists the current theme and every named splitter's
+position through Preferences.jl:
+
+```julia
+using ManyUITUI
+
+restore_ui_prefs!(app)   # on the way in
+save_ui_prefs!(app)      # on the way out
+```
+
+These live with the `App` and not in `ManyUI`, which has no dependency
+beyond the stdlib and keeps it that way.
+
+!!! warning "A splitter needs an explicit id"
+    A preference needs a key that is the same next time, and a widget's
+    `id` defaults to `gensym` — a different symbol every run. So a
+    splitter built as `Splitter(a, b)` **cannot** be persisted, and one
+    built as `Splitter(a, b; id = :panes)` can.
+
+    `save_splits!` skips the unnamed ones and returns how many it
+    actually wrote, so an application can say *"one of your two
+    splitters has no id"* rather than leaving you to wonder why nothing
+    came back. `is_persistable_id` answers the same question directly.
+
+Two things are deliberately ignored rather than thrown on restore: a
+theme name that is no longer registered, and a remembered splitter
+whose pane count no longer matches. A preferences file outlives the
+code that wrote it, so a stale entry must not stop the application
+starting, and old weights for a differently shaped tree would silently
+mean something else.
