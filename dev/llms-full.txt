@@ -1,0 +1,2917 @@
+# ManyUI.jl
+
+> A Julia UI framework whose widget tree and model are written once and projected to several targets: a terminal, a browser, a Dear ImGui window, or a CLI.
+
+This file is the complete documentation, one page after another, in the order the site presents them.
+
+<!-- source: index.md -->
+
+## Home
+
+## ManyUI.jl
+
+```@meta
+CurrentModule = ManyUI
+```
+
+**ManyUI** is a unified, declarative User Interface framework for Julia. 
+
+Its philosophy is simple: **write your domain model and UI presentation once, and render it anywhere.** 
+Instead of tightly coupling your code to a single platform, `ManyUI` uses a hierarchical widget tree and an event-driven architecture that can be projected onto multiple backends seamlessly.
+
+The ecosystem is extended by companion packages that provide different rendering projections:
+
+1. **[ManyUI.jl](https://github.com/s-celles/ManyUI.jl) (Core)**
+   The pure domain model and reactive widget tree. Completely platform-agnostic, with zero rendering dependencies.
+2. **[ManyUITUI.jl](https://github.com/s-celles/ManyUITUI.jl) (Terminal Backend)**
+   Render your application directly in the terminal with full interactivity, utilizing an optimized diffing renderer that emits minimal ANSI escape sequences.
+3. **[ManyUIWeb.jl](https://github.com/s-celles/ManyUIWeb.jl)**
+   - *WebTerminal*: Serve your TUI application over the web. The terminal is emulated in the browser via WebSockets.
+   - *WebNative*: Translate the exact same widget tree into native HTML and DOM elements for a true semantic web experience.
+4. **[ManyUICImGui.jl](https://github.com/s-celles/ManyUICImGui.jl)**
+   Dear ImGui desktop projection. It is currently in development; the package
+   already provides a headless driver contract and an optional GLFW/OpenGL3
+   window seam. See its [parity roadmap](https://github.com/s-celles/ManyUICImGui.jl/blob/main/ROADMAP.md).
+5. **[ManyUICLI.jl](https://github.com/s-celles/ManyUICLI.jl)**
+   Automatically generate a Command-Line Interface from your declarative UI model using `Comonicon.jl`.
+6. **[ManyUIDemos.jl](https://github.com/s-celles/ManyUIDemos.jl)**
+   A centralized demonstration hub showcasing how to write a domain model once and launch it across all `ManyUI` projections.
+
+```@docs
+ManyUI
+```
+
+## Installation
+
+```julia
+using Pkg
+Pkg.develop(path = "path/to/ManyUI")
+```
+
+To also serve your application in a browser, add `ManyUIWeb`. It
+depends on `ManyUI`, so a pure terminal application never pays for
+`HTTP.jl` or WebSocket handling.
+
+## Quickstart
+
+A counter: a label, a button, and a click that updates what the label
+says.
+
+```julia
+using ManyUI
+
+clicks = Ref(0)
+readout = Label("Count: 0"; id = :count)
+
+ui = Container(
+    readout,
+    Button("Click me", _ -> begin
+               clicks[] += 1
+               readout.text[] = "Count: $(clicks[])"
+               nothing
+           end; id = :go),
+)
+
+## `HeadlessDriver` renders into memory instead of a terminal, which is
+## what makes the examples on this page runnable. Swap it for
+## `TerminalDriver()` to draw on a real tty, or hand the same tree to
+## `ManyUIWeb.serve` to draw it in a browser.
+driver = HeadlessDriver(Size(40, 8))
+app = App(ui, driver)
+
+ManyUI.start!(driver, Size(40, 8))
+handle!(app, ResizeEvent(Size(40, 8)))
+frame!(app)
+
+nothing # hide
+```
+
+Assigning to `readout.text` is the whole update. `Label.text` is
+reactive, so writing it marks the label dirty and the next frame
+repaints it — nothing calls a render function by hand.
+
+Widgets are addressable by their CSS id, and a click routed through hit
+testing reaches the right one:
+
+```julia
+button = query_one(ui, "#go")
+r = region(button)
+clear_output!(driver)   # forget the first frame; watch just this click
+
+dispatch_event!(ui, MouseEvent(MouseAction.PRESS, MouseButton.LEFT,
+                               r.x, r.y, MOD_NONE))
+frame!(app)
+
+(clicks = clicks[], text = readout.text[])
+```
+
+Now look at what that click actually cost. `Count: 0` became `Count: 1`,
+so exactly one cell changed, and the diff sends exactly one cell:
+
+```julia
+String(take_bytes!(driver))
+```
+
+`\e[1;8H1` is the entire counter update: move the cursor to row 1,
+column 8, and write `1`. The button is redrawn too because clicking
+focused it, which genuinely changed how it looks. Nothing else on the
+screen is touched.
+
+## Running on a real terminal
+
+`TerminalDriver` puts the host terminal into raw mode and the alternate
+screen buffer, so an application never overwrites the user's shell
+history, and restores both even if the application throws:
+
+```julia
+using ManyUI
+
+app = App(my_ui(), TerminalDriver())
+run!(app)   # blocks until quit!(app)
+```
+
+## Where to go next
+
+- [Concepts](@ref) — the render pipeline and the driver seam, the idea
+  the rest of the framework hangs off.
+- [Layout](@ref) — the box model and flex sizing.
+- [Styling](@ref) — the CSS-like syntax, selectors and colors.
+- [Events](@ref) — capture, bubble and consumption.
+- [Widgets](@ref) — the built-in widget library.
+
+<!-- source: concepts.md -->
+
+## Concepts
+
+## Concepts
+
+```@meta
+CurrentModule = ManyUI
+```
+
+ManyUI borrows the browser's ideas and applies them to a grid of
+characters. If you know the DOM, CSS and `addEventListener`, you
+already know the shape of this framework.
+
+## The render pipeline
+
+Every frame runs the same five stages. Each is a plain function over
+plain data, which is why almost all of ManyUI can be tested without a
+terminal:
+
+```
+widget tree ─▶ layout ─▶ cell buffer ─▶ diff ─▶ ANSI bytes ─▶ driver
+```
+
+1. **Tree.** A hierarchy of widgets, each holding a `WidgetNode` with
+   its id, classes, parent and children.
+2. **Layout.** `compute_layout` resolves the CSS box model into an
+   absolute `Region` for every node.
+3. **Paint.** `paint!` walks the laid-out tree and writes `Cell`s into
+   a `Buffer`.
+4. **Diff.** `diff` compares the previous frame to the new one and
+   yields a `Patch`: the minimal set of changed cells.
+5. **Encode.** `AnsiEncoder` turns that patch into escape sequences,
+   emitting a cursor move only when cells are not contiguous, and an
+   SGR only when the style actually changed.
+
+The diff is what keeps rendering cheap. An unchanged frame costs
+nothing at all:
+
+```julia
+using ManyUI
+
+before = Buffer(Size(10, 2))
+after = Buffer(Size(10, 2))
+clear!(before)
+clear!(after)
+
+## Identical buffers produce no work whatsoever.
+length(diff(before, before).spans)
+```
+
+Change two cells, and only those two cross the wire:
+
+```julia
+write_text!(after, 1, 1, "hi", STYLE_NONE)
+patch = diff(before, after)
+(spans = length(patch.spans), cells = n_cells(patch))
+```
+
+```julia
+encoder = AnsiEncoder(ColorDepth.TRUECOLOR)
+length(encode(encoder, patch))
+```
+
+## The driver seam
+
+This is the idea the whole project rests on. A `Driver` is the *only*
+thing that knows what a rendering target is, and it has exactly nine
+required methods:
+
+```julia
+using ManyUI
+REQUIRED_DRIVER_METHODS
+```
+
+A driver moves bytes, reports a size and its capabilities, and yields
+events. That is all. No method in the interface accepts or returns a
+`Buffer`, a `Patch`, a `Widget` or a `Style`, so a driver cannot reach
+into the framework and the framework cannot depend on a target.
+
+Three drivers exist today:
+
+| Driver | Target | Lives in |
+|:--|:--|:--|
+| `TerminalDriver` | the host tty | `ManyUI` |
+| `HeadlessDriver` | an in-memory buffer | `ManyUI` |
+| `WebSocketDriver` | a browser | `ManyUIWeb` |
+
+`ManyUIWeb` implements those nine methods over a WebSocket and adds
+nothing else. That is why `ManyUI` has no HTTP dependency: a pure
+terminal application never pays for the web bridge. A driver can check
+its own conformance without reading ManyUI's source, which is how the
+bridge package proves it implements the interface:
+
+```julia
+check_driver_interface(HeadlessDriver)   # empty means conformant
+```
+
+`HeadlessDriver` is the proof the seam is honest. It renders into an
+`IOBuffer`, so the whole framework — including the event loop — is
+testable with no tty and no network. If a headless driver needs nothing
+from ManyUI's internals, neither does a web one.
+
+## Reactivity and dirty flagging
+
+Mutating a widget does not repaint the world. `mark!` flags only that
+widget and the descendants a change can actually reach. Siblings,
+uncles and cousins are never touched, so a deep tree with one changed
+leaf costs one subtree of layout rather than a full pass.
+
+Ancestors get a `Dirty.SUBTREE` breadcrumb so the next frame can find
+the dirty node, and that breadcrumb is promoted to real layout work
+only at an ancestor whose size genuinely depends on its content.
+
+## The asynchronous event loop
+
+`run!` blocks on a `Channel{Event}` that the driver fills. The OS
+scheduler does the pacing: there is no fixed frame rate and no
+busy-wait. A burst — a resize storm, a large paste — drains through the
+channel and collapses into a single repaint.
+
+The loop is parameterised over the driver, so `App{HeadlessDriver}` and
+`App{WebSocketDriver}` are separate concrete types and the frame path
+stays statically dispatched.
+
+## Wide characters
+
+A terminal grid is not a string. An emoji or a CJK ideograph occupies
+two cells, and getting this wrong corrupts every column to its right.
+ManyUI measures by grapheme cluster, never by codepoint, and never
+trusts `Base.textwidth`:
+
+```julia
+using ManyUI
+[(s, grapheme_width(s), textwidth(s)) for s in ("a", "漢", "❤️", "👨‍👩‍👧‍👦")]
+```
+
+The last two are why this matters: `Base.textwidth` reports 1 for a
+VS16 emoji that renders in two cells, and 8 for a ZWJ family that
+renders in two.
+
+<!-- source: backends.md -->
+
+## Backends
+
+## Backends
+
+A `Driver` makes targets swappable. A `Backend` makes them
+swappable *without editing the call*.
+
+## One verb
+
+`launch` runs an app on any target:
+
+```julia
+using ManyUI
+
+ui() = Container(Label("hello"))
+
+launch(ui)                                   # this terminal
+launch(ui; backend = HeadlessBackend())      # nothing attached
+```
+
+With `ManyUIWeb` loaded, the same app runs in a browser and the *only*
+thing that changes is the backend argument:
+
+```julia
+using ManyUI, ManyUIWeb
+
+launch(ui; backend = WebBackend(port = 8000))
+```
+
+Nothing else moves. `config` and `stylesheet` describe the **app**, so they
+are spelled the same way whatever the target; a port or a tty describes the
+**target**, so it lives on the backend.
+
+## Capability discovery
+
+Applications that offer more than one target can inspect a backend without
+starting it:
+
+```julia
+ManyUI.backend_available(backend)
+ManyUI.backend_kind(backend)
+ManyUI.backend_capabilities(backend)
+```
+
+The common capability fields are `mouse`, `keyboard`, `text_input`, `focus`,
+`resize`, `transparency`, `animations`, `native_window`, `gpu` and
+`multi_session`. For example, an ImGui launcher can hide its native option
+when `backend_available(ImGuiBackend())` is false because CImGui is not
+installed, while WebTUI and WebNative can advertise their own feature sets.
+
+## Why a factory
+
+`launch` takes `() -> Widget` — a function that builds a tree — not a tree:
+
+```julia
+launch(ui)          # yes
+launch(ui())        # no
+```
+
+A terminal needs one app. A browser needs **one app per connected client**,
+each with its own tree, and it cannot know how many until they arrive. Only
+a factory serves both, which is why it is the universal unit rather than a
+convenience. It is also what keeps sessions isolated: two browsers share no
+mutable state because each got its own `factory()` call.
+
+## Blocking, and the handle
+
+By default `launch` blocks until the app quits and returns an exit code,
+like `run!`:
+
+```julia
+code = launch(ui)     # returns when the user quits
+```
+
+Pass `wait = false` to keep going and get a handle back:
+
+```julia
+h = launch(ui; wait = false)
+isopen(h)     # still going?
+close(h)      # ask it to stop
+wait(h)       # block until it has
+```
+
+The handle's *type* is the backend's business — an `App` for a terminal, a
+`WebServer` for WebTUI, or a `WebNativeServer` for WebNative — but every handle
+answers those same three verbs, so code that starts and stops an app need not
+know which backend it got. A handle is **live when you get it**: `launch` does
+not return until the loop is actually up, so `isopen(h)` is true on the next
+line and a `close` cannot race the loop into existence.
+
+## Writing a backend
+
+Two things, and nothing else:
+
+```julia
+struct MyBackend <: ManyUI.Backend end
+ManyUI.make_driver(::MyBackend) = MyDriver()
+```
+
+That is the whole contract for a target with one driver. There is no
+fallback for `make_driver` on purpose: a backend that forgets it
+gets a `MethodError` naming the type, rather than a silent default driver
+writing to somebody's terminal.
+
+A backend whose target **multiplexes** — one app per client, as the web
+does — has no single driver to make, so it defines its own `launch` method
+instead and never implements `make_driver`. `ManyUIWeb.WebBackend` is the
+worked example, and it lives in another package entirely: a backend joins
+by dispatch, with no cooperation from ManyUI beyond the abstract type.
+
+## The old entry points still work
+
+`launch` is a convenience over the seam, not a replacement for it. This
+still means exactly what it always did, and is what you want when you have
+a driver in hand rather than a description of one:
+
+```julia
+run!(App(ui(), TerminalDriver()))
+```
+
+## ManyUITUI (Terminal Backend)
+
+**ManyUITUI.jl** is the official Terminal User Interface (TUI) backend for the ManyUI framework. It projects the declarative widget tree directly into a standard terminal emulator with full interactivity, rich colors, and complex layouts.
+
+### Features
+- **Terminal Driver & Raw Mode**: Safely captures keyboard and mouse inputs, and handles terminal resizing seamlessly.
+- **Optimized Diffing Engine**: Only the parts of the screen that actually change are redrawn, utilizing minimal ANSI escape sequences. This ensures a buttery smooth, flicker-free experience even over slow SSH connections.
+- **CSS-like Styling**: Translates `ManyUI` declarative styles (flexbox constraints, borders, paddings, colors) into raw terminal characters and ANSI codes.
+- **Event Parsing**: Parses complex ANSI escape sequences from standard input into rich Julia events (`Click`, `KeyPress`, `Scroll`, etc.).
+
+### Quickstart
+
+```julia
+using ManyUI
+using ManyUITUI
+
+## 1. Domain Model
+mutable struct CounterModel
+    clicks::Int
+end
+struct Increment <: Action end
+
+## 2. Logic
+ManyUI.execute!(model::CounterModel, ::Increment) = model.clicks += 1
+
+## 3. View
+function ManyUI.render(model::CounterModel, proj::ManyUI.Projection)
+    Container(
+        Label("Count: $(model.clicks)"),
+        Button("Click me", _ -> ManyUI.execute!(model, Increment()))
+    )
+end
+
+## 4. Launch in the Terminal!
+ManyUI.launch(CounterModel(0), TUI())
+```
+
+## ManyUICImGui (Dear ImGui desktop backend)
+
+**ManyUICImGui.jl** is the desktop projection under development. It keeps the
+ManyUI widget/model and canonical event contracts while using Dear ImGui for
+native rendering. Its headless driver is available without graphical system
+libraries, so backend and event tests can run in CI.
+
+The optional native window seam currently uses CImGui's GLFW/OpenGL3 backend.
+It lives in a package extension whose triggers are **CImGui, GLFW, HarfBuzz
+and ModernGL** — all four. An extension fires only when every trigger is
+loaded, so installing three of them leaves the backend asleep and
+`launch_manyui` reaches a stub that throws:
+
+```julia
+using Pkg
+Pkg.add(["ManyUICImGui", "CImGui", "GLFW", "HarfBuzz", "ModernGL"])
+
+using ManyUI, ManyUICImGui
+import CImGui, GLFW, HarfBuzz, ModernGL   # wake the extension
+
+ManyUICImGui.native_available()           # true once it is awake
+
+ui() = Container(Label("Hello from ManyUI"))
+ManyUICImGui.launch_manyui(ui; width=900, height=600)
+```
+
+!!! note "HarfBuzz needs a recent `HarfBuzz_jll`"
+    `libcimgui` calls `glfwGetPlatform`, which exists only in GLFW 3.4. A
+    `HarfBuzz_jll` bound that forces the 100.x series drags `GLFW_jll` back
+    to 3.3.9, where that symbol is missing, and the process dies with
+    `signal 11 (2): Segmentation fault: 11`. If that happens, check the
+    resolved `GLFW_jll` first — 3.3.9 is the symptom.
+
+### Running the ManyUI demos in a CImGui mode
+
+`ManyUIDemos` keeps the GPU stack out of its base environment, so the two
+CImGui modes run from the `CImGuiEnv` environment shipped beside it:
+
+```console
+$ just instantiate-cimgui                        # once
+$ just hub-cimgui                                # the hub, CImGui TUI
+$ just demo-cimgui gallery.jl cimguitui          # one demo
+```
+
+Asking for `cimgui`/`cimguitui` from the base environment prints what is
+missing and the command above rather than failing.
+
+### Closing the window
+
+The two paths end their window differently, and a launcher that offers both
+has to know which:
+
+* **`launch_tui`** runs a real ManyUI `App`, so `ManyUITUI.quit!(app)` is
+  enough — the render loop stops with the App and the window goes with it.
+* **`launch_manyui`** projects widgets straight into ImGui with no `App`
+  behind them. A callback that means "this window is done" has nothing to
+  quit, so it calls `ManyUICImGui.request_close!()` instead, which asks the
+  window that is currently rendering to close and returns whether there was
+  one. It never throws and returns `false` when the extension is asleep, so
+  code that runs under every backend can call it unconditionally.
+
+The initial projection covers `Container`, `Label`, `Static` and `Button`.
+Widget, layout, event, theme and animation parity is tracked in the
+[ManyUICImGui roadmap](https://github.com/s-celles/ManyUICImGui.jl/blob/main/ROADMAP.md).
+
+## Reference
+
+<!-- source: layout.md -->
+
+## Layout
+
+## Layout
+
+```@meta
+CurrentModule = ManyUI
+```
+
+The layout engine resolves a widget tree into an absolute `Region` for
+every node, using a box model deliberately close to CSS.
+
+## The box model
+
+Every widget has four nested boxes, derived from its outer margin box:
+
+```
+┌─ margin ──────────────────────────┐
+│  ┌─ border ─────────────────────┐ │
+│  │  ┌─ padding ───────────────┐ │ │
+│  │  │  ┌─ content ─────────┐  │ │ │
+│  │  │  │  the widget draws │  │ │ │
+│  │  │  └───────────────────┘  │ │ │
+│  │  └─────────────────────────┘ │ │
+│  └──────────────────────────────┘ │
+└───────────────────────────────────┘
+```
+
+`layout_box` is the single definition of that derivation; no other part
+of the framework re-derives it. `region(w)` returns the border box,
+and `content_region(w)` the content box a widget may actually paint
+into.
+
+Margins, padding and borders are measured in cells:
+
+```julia
+using ManyUI
+
+outer = Region(1, 1, 20, 6)
+style = BoxStyle(; margin = Spacing(1), padding = Spacing(2),
+                 border = Border(BorderKind.ROUND, STYLE_NONE))
+lb = layout_box(style, outer)
+
+(margin = lb.margin_box, border = lb.border_box,
+ padding = lb.padding_box, content = lb.content)
+```
+
+Each ring shrinks the next: one cell of margin, one of border, then two
+of padding, taking a 20×6 outer box down to a 12×0 content box. Ask for
+more chrome than you have room for and the content box empties rather
+than going negative.
+
+## Sizing
+
+A `Length` resolves in one of four ways:
+
+| Constructor | Meaning |
+|:--|:--|
+| `AUTO` | size to content |
+| `cells(n)` | exactly `n` cells |
+| `pct(n)` | `n`% of the parent's content box |
+| `fr(n)` | weight `n` of the *remaining* free space |
+
+`fr` is the flex unit. After fixed and percentage children are placed,
+whatever is left is split between the `fr` children in proportion to
+their weights.
+
+```julia
+using ManyUI
+(cells(10), pct(50), fr(1), AUTO)
+```
+
+## Flex containers
+
+A container with `display = Display.FLEX` lays its children out along
+`direction`, distributing space with `justify` and aligning them across
+the axis with `align`:
+
+```julia
+(direction = instances(Direction.T),
+ justify = instances(Justify.T),
+ align = instances(Align.T))
+```
+
+`layout!` computes the whole tree against a viewport:
+
+```julia
+using ManyUI
+
+root = Container(Label("first"; id = :a), Label("second"; id = :b);
+                 id = :root)
+layout!(root, Region(1, 1, 20, 6))
+
+(root = region(root),
+ a = region(query_one(root, "#a")),
+ b = region(query_one(root, "#b")))
+```
+
+## Resize
+
+When the terminal changes size, the entire tree's bounding boxes are
+recomputed against the new viewport. A `ResizeEvent` from any source —
+a `SIGWINCH` on a tty, a browser window resize reported over the
+WebSocket — funnels through the same path:
+
+```julia
+using ManyUI
+
+driver = HeadlessDriver(Size(20, 5))
+app = App(Container(Label("x")), driver)
+handle!(app, ResizeEvent(Size(60, 20)))
+buffer_size(app.back)
+```
+
+## Pure and mutating forms
+
+`compute_layout` is pure: it returns a `LayoutMap` from widget to box
+and touches nothing. `apply_layout!` writes such a map into the tree,
+and `layout!` is the two composed. `relayout!` is the incremental form
+the frame loop actually uses — it recomputes only the dirty subtree,
+anchored at its existing margin box.
+
+## Splitters
+
+A `Splitter` is a row or column of panes with a draggable handle
+between each pair:
+
+```julia
+using ManyUI
+
+sp = Splitter(Label("left"), Label("right"); weights = [3, 1])
+(pane_count(sp), length(handles(sp)), weights_of(sp))
+```
+
+`weights` are ratios — `[1, 1]` and `[3, 3]` describe the same split —
+and they *are* the panes' `grow`, so the ordinary flex pass distributes
+the space and the splitter only ever rewrites two numbers. Read them
+back with `weights_of` and set them with `set_weights!`.
+
+The handles are children too, interleaved `pane, handle, pane`. Use
+`panes(sp)` and `handles(sp)` rather than indexing `children` and
+counting in twos; `mount!` on a `Splitter` throws, because a stray
+child would shift the parity and turn a pane into a handle.
+
+### Why a handle is a widget
+
+Because then nothing about it is special. It is hit-tested, painted and
+laid out by machinery that already exists — no table of rectangles kept
+on the side, no painting over a neighbour's border.
+
+The one thing a handle cannot do for itself is follow a drag: a pointer
+that outruns the redraw leaves the one-cell handle, and the next event
+lands on a pane. So the *splitter* consumes drags, in the capture
+phase, while one of its handles is down. Capture runs root-first, so
+the splitter sees the event before the pane the pointer strayed onto —
+pointer capture out of the propagation order that already exists.
+
+A drag moves only the two panes it is between: their `grow` total is
+preserved, so a third pane never shifts under a resize it had nothing
+to do with. Both ends are clamped, so dragging past the edge cannot
+invert them.
+
+```julia
+Splitter(Label("top"), Label("bottom");
+         direction = Direction.COLUMN,
+         on_resize = sp -> @info "now $(weights_of(sp))")
+```
+
+`on_resize` fires once per actual change, not once per mouse event.
+
+<!-- source: styling.md -->
+
+## Styling
+
+## Styling
+
+```@meta
+CurrentModule = ManyUI
+```
+
+Appearance is declarative. Rules are written in a CSS-like syntax,
+matched against widget ids, classes and types, and cascaded onto the
+tree by specificity.
+
+## Stylesheets
+
+`parse_css` builds a `Stylesheet`; the `css"..."` string macro does the
+same at parse time:
+
+```julia
+using ManyUI
+
+sheet = parse_css("""
+    Container { layout: column; padding: 1; gap: 1; border: round cyan; }
+    Label     { color: cyan; }
+    .warn     { color: yellow; }
+    #title    { color: red; }
+""")
+
+length(sheet.rules)
+```
+
+Bad input throws a `CssParseError` carrying the line and column, never
+a bare `ArgumentError`:
+
+```julia
+try
+    parse_css("Label { color: }")
+    false
+catch e
+    e isa CssParseError
+end
+```
+
+## Selectors and specificity
+
+Three selector kinds are supported, and they rank exactly as CSS ranks
+them — id beats class beats type:
+
+```julia
+[(src, specificity(parse_css(src).rules[1].selector))
+ for src in ("#title { color: red; }",
+             ".warn { color: red; }",
+             "Label { color: red; }")]
+```
+
+`Specificity(id, class, type)` is compared field by field. Between two
+rules of equal specificity, the later one wins.
+
+Applying the sheet resolves each node's computed style. A label that is
+`#title`, `.warn` *and* a `Label` matches all three rules, and the id
+wins:
+
+```julia
+label = Label("hi"; id = :title, classes = [:warn])
+root = Container(label)
+apply_stylesheet!(sheet, root)
+
+computed_style(label).fg
+```
+
+`apply_stylesheet!` walks the whole tree; `recascade!` is the
+incremental form the frame loop uses, doing the work only where the
+style is dirty.
+
+## Properties
+
+| Property | Value |
+|:--|:--|
+| `color` | foreground color |
+| `background` | background color |
+| `border` | `<kind>` or `<kind> <color>` |
+| `display` | `none`, `block`, `flex` |
+| `layout` | a direction; shorthand for `display: flex` plus `direction` |
+| `direction` | `row`, `column`, `row-reverse`, `column-reverse` |
+| `justify` | `start`, `center`, `end`, `space-between`, `space-around`, `space-evenly` |
+| `align` | `start`, `center`, `end`, `stretch` |
+| `width`, `height` | a length |
+| `margin`, `padding` | 1, 2 or 4 cell counts, in CSS order |
+| `gap` | cells between flex children |
+| `grow`, `shrink` | flex weights |
+| `overflow` | `visible`, `hidden`, `scroll` |
+
+Adding a property is adding a `parse_property` method — the table is
+extensible, and is used only by the parser, never in a render loop.
+
+## Colors
+
+Colors come in four kinds:
+
+```julia
+using ManyUI
+(rgb(0xFF, 0x64, 0x00), ansi256(202), ansi16(9), COLOR_DEFAULT)
+```
+
+## Color degradation
+
+Not every terminal speaks 24-bit color. Rather than refuse to draw,
+ManyUI maps a color down to whatever the target actually supports.
+`degrade` is a pure function of the color and the depth:
+
+```julia
+orange = rgb(0xFF, 0x64, 0x00)
+(truecolor = orange,
+ at_256 = degrade(orange, ColorDepth.ANSI256),
+ at_16 = degrade(orange, ColorDepth.ANSI16))
+```
+
+The 256-color step maps into the 6×6×6 cube and the grayscale ramp; the
+16-color step picks the nearest perceptual match.
+
+The depth is never guessed from `ENV` inside the render path. It comes
+from the driver's `capabilities`, so a web client reporting no
+truecolor support degrades exactly like a limited tty:
+
+```julia
+caps = capabilities(HeadlessDriver(Size(10, 2); depth = ColorDepth.ANSI16))
+caps.color_depth
+```
+
+`detect_color_depth` is what a `TerminalDriver` uses to answer that
+question for a real terminal, from `COLORTERM` and `TERM`.
+
+## Text attributes
+
+Attributes live on `Style`:
+
+```julia
+s = with(STYLE_NONE, Attr.BOLD, true)
+(bold = has(s, Attr.BOLD), italic = has(s, Attr.ITALIC))
+```
+
+Styles merge with the child winning wherever it specifies something —
+the same rule the cascade itself is built from.
+
+## Focus rings
+
+`:focus` matches the node that holds focus; `:focus-within` matches it
+*and every ancestor*. Together they turn a focus ring from a branch in
+every widget's `render!` into one stylesheet rule:
+
+```julia
+parse_css("""
+    .pane              { border: solid #303030; }
+    .pane:focus-within { border: solid #00ffff; }
+    Button:focus       { text-style: reverse; }
+""")
+```
+
+`:focus-within` is the one that matters for panes. Focus lands on a
+table *inside* a pane, and it is the pane that must light up — so the
+selector has to be about the ancestor, not the focused widget.
+
+They read two flags on `WidgetNode`, `focused` and `focus_within`,
+which `focus!` maintains along one chain from the focused node to the
+root. Stored rather than computed, deliberately: the cascade asks the
+question of every node against every rule, so answering `focus-within`
+by walking descendants would make one focus change cost the *size* of
+the tree, where maintaining the chain costs its *depth*.
+
+`focus!` also marks each node on that chain `Dirty.STYLE`, so the next
+`recascade!` re-runs the rules that read them and the ring follows TAB
+with nothing else wired up.
+
+A pseudo-class ranks with a class, exactly as in CSS — `Button:focus`
+beats `Button` and loses to `#ok`. An unknown one is a `CssParseError`
+with a position rather than a selector that silently never matches.
+
+## Rich text
+
+The cascade styles *nodes*. Some styled things are not nodes: the key
+in a tab caption, the level in a log line, the units in a status
+readout. Making each of those a widget would put three nodes on a tab
+strip and one per log row.
+
+`RichText` is one line whose style varies along it — a sequence of
+`TextRun`s, each carrying an override:
+
+```julia
+using ManyUI
+
+warn = Style(fg = rgb(255, 200, 0), bold = true)
+caption = RichText(TextRun("1", warn), TextRun(" Server"))
+
+(plain(caption), text_width(caption))
+```
+
+`Label` and `Static` accept one wherever they accept a string, and a
+string converts implicitly, so nothing about the existing spelling
+changes:
+
+```julia
+l = Label(caption)
+l.text[] = "back to plain"      # still a valid assignment
+plain(l.text[])
+```
+
+### A run is a difference, not an appearance
+
+A run's style is folded over the painting widget's computed style with
+`merge` — the cascade's own monoid. So `STYLE_NONE`, the default, means
+*exactly the widget's style*, and a run naming only `bold` keeps the
+widget's colours:
+
+```julia
+base = Style(fg = rgb(0, 255, 0), bg = rgb(0, 0, 0))
+got = merge(base, Style(bold = true))
+
+(fg = got.fg == rgb(0, 255, 0), bg = got.bg == rgb(0, 0, 0),
+ bold = has(got, Attr.BOLD))
+```
+
+That is what lets one `RichText` be built once and painted under a
+light and a dark theme without being rebuilt. Runs that specify an
+absolute colour still work — they simply stop tracking the theme.
+
+### Styling never moves a break
+
+`text_width`, `truncate_width` and `wrap_width` all accept a
+`RichText`. Wrapping runs the *plain* text through the ordinary string
+wrap and reattaches the styling afterwards, which makes one property
+true by construction:
+
+```julia
+rt = RichText(TextRun("the quick ", Style(bold = true)),
+              TextRun("brown fox jumps"))
+
+plain.(wrap_width(rt, 12)) == wrap_width(plain(rt), 12)
+```
+
+Colouring a paragraph cannot reflow it. A second wrap implemented over
+styled runs would have to be kept in step with the first forever to
+promise that; there is only one wrap.
+
+Two details follow from the same reasoning. A joining space inherits
+the style of the whitespace run it replaces, because that cell still
+has a background and resetting it would leave a hole in a highlighted
+line. And `truncate_width` yields a *prefix*: it stops at the first
+cluster that does not fit rather than skipping it, so a wide cluster
+refused at the right edge never lets a narrow run behind it slide
+forward into the freed cell.
+
+### In the row widgets
+
+A `List`'s `format`, a `Table`'s or `DataTable`'s `cell`, and a tab
+caption all accept `TextLike` — either spelling. Nothing converts
+eagerly, so the ordinary plain-string case allocates nothing extra:
+
+```julia
+warn = Style(fg = rgb(255, 0, 0))
+level = r -> RichText(TextRun(String(r[1]),
+                              r[1] === :error ? warn : STYLE_NONE),
+                      TextRun(" " * r[2]))
+
+log = List([(:error, "disk full"), (:info, "ok")]; format = level)
+n_rows(log)
+```
+
+This is the case that motivated the primitive. A log list colouring
+only its level column, or a tab strip with the shortcut key in a
+warning colour, would otherwise need one widget per styled fragment —
+three nodes on every tab, one per log row.
+
+Column widths, truncation and the ellipsis marker behave exactly as
+they do for plain cells, because they are decided on the text.
+
+### Painting one
+
+Backends paint a `RichText` through `write_richtext!`, which folds each
+run over the widget's style and stops at the first run the edge cut
+short:
+
+```julia
+using ManyUITUI
+
+buf = Buffer(8, 1)
+write_richtext!(buf, 1, 1, caption)
+string(buf)
+```
+
+## Border captions
+
+A caption on a frame is not content and takes no content row — it is
+painted *on* the border. A widget cannot do that itself: `render!` is
+handed the content box, and the border is outside it. So captions are a
+seam the paint pass asks about:
+
+```julia
+using ManyUI
+
+border_title(Container())            # empty by default
+border_title(Container(; title = "Server Log"))
+```
+
+`Container` ships with `title` and `title_align`; override
+`border_title` and `border_title_align` and any widget gains one.
+
+```julia
+Container(Label("body");
+          title = RichText(TextRun("!", Style(fg = rgb(255, 0, 0))),
+                           TextRun(" Server Log")),
+          title_align = Align.CENTER)
+```
+
+Two rules are worth knowing before you rely on them. A caption **never
+touches a corner**: it may use the top edge less one glyph at each end
+and less its two pad cells, is truncated to whatever that leaves, and
+is dropped entirely on a box too narrow to hold one — the frame is what
+must survive. And each run folds over the *border's* style, not the
+widget's, so an unstyled caption matches the line it sits on rather
+than resetting against it.
+
+Setting a caption is `Dirty.PAINT`, never `Dirty.LAYOUT`: the border
+row it lands on exists whether or not anything is written on it, so a
+new caption cannot move the widget or its siblings.
+
+## Themes
+
+The cascade can say what colour a widget is. What it cannot say is what
+`warning` *means* — that answer belongs to the whole application and
+changes when the user picks a different palette. Tokens are the seam:
+
+```julia
+using ManyUI
+
+token(:warning)                       # a Color, but a NAMED one
+theme_color(theme(:dark), :warning)   # what it means under :dark
+theme_color(theme(:light), :warning)  # ... and under :light
+```
+
+Name one from CSS with `var(--name)`:
+
+```julia
+sheet = parse_css("""
+    Container { background: var(--bg); border: solid; }
+    Label     { color: var(--text); }
+    .alert    { color: var(--error); }
+""")
+```
+
+### A token becomes a colour at emission
+
+This is the whole design, and everything useful follows from it. A
+token survives parsing, survives the cascade, survives `merge`, and
+survives sitting inside a `TextRun`. It is looked up once, at the point
+a colour meets a device — `color_seq!` on the terminal, `_css_color` on
+the web.
+
+So:
+
+- one parsed stylesheet serves every theme;
+- a `RichText` naming `var(--warning)` is built once and is correct
+  under every theme, instead of being frozen to whichever palette was
+  current when it was built;
+- `set_theme!` needs neither a re-cascade nor a re-parse.
+
+```julia
+before = theme()
+set_theme!(:light)
+resolve_token(token(:accent))    # the light accent
+set_theme!(before)
+```
+
+!!! note "A swap needs a repaint"
+    Because nothing in the tree holds a resolved colour, nothing in the
+    tree becomes dirty when the theme changes. The frame diff compares
+    cells, and the cells did not change — so it will not find the swap
+    on its own. Follow `set_theme!` with a full repaint (`refresh!` on
+    the terminal backend).
+
+### Defining your own
+
+A theme need not be total. A token it does not name falls back to the
+colour declared when the token was registered, so a theme that cares
+about three colours is three entries long and still safe:
+
+```julia
+register_theme!(Theme(:solar, Dict(:accent => rgb(0xb58900),
+                                   :bg => rgb(0x002b36))))
+:solar in themes()
+```
+
+`register_token!(:brand, rgb(0x00a0a0))` adds a token of your own, with
+the fallback every theme that ignores it will use.
+
+## Remembering a theme
+
+`ManyUITUI` persists the current theme and every named splitter's
+position through Preferences.jl:
+
+```julia
+using ManyUITUI
+
+restore_ui_prefs!(app)   # on the way in
+save_ui_prefs!(app)      # on the way out
+```
+
+These live with the `App` and not in `ManyUI`, which has no dependency
+beyond the stdlib and keeps it that way.
+
+!!! warning "A splitter needs an explicit id"
+    A preference needs a key that is the same next time, and a widget's
+    `id` defaults to `gensym` — a different symbol every run. So a
+    splitter built as `Splitter(a, b)` **cannot** be persisted, and one
+    built as `Splitter(a, b; id = :panes)` can.
+
+    `save_splits!` skips the unnamed ones and returns how many it
+    actually wrote, so an application can say *"one of your two
+    splitters has no id"* rather than leaving you to wonder why nothing
+    came back. `is_persistable_id` answers the same question directly.
+
+Two things are deliberately ignored rather than thrown on restore: a
+theme name that is no longer registered, and a remembered splitter
+whose pane count no longer matches. A preferences file outlives the
+code that wrote it, so a stale entry must not stop the application
+starting, and old weights for a differently shaped tree would silently
+mean something else.
+
+<!-- source: events.md -->
+
+## Events
+
+## Events
+
+```@meta
+CurrentModule = ManyUI
+```
+
+Input propagates through the widget tree in two phases, exactly as it
+does in a browser: down from the root to the target (capture), then
+back up (bubble), stopping the moment something consumes it.
+
+## Handling an event
+
+Handlers are methods on `on_event!`, dispatched on both the widget type
+and the event type. There is no callback registry and no closures:
+
+```julia
+ManyUI.on_event!(w::MyButton, d::Dispatch{KeyEvent}) = begin
+    if d.event.code === Key.ENTER
+        activate!(w)
+        consume!(d)      # stop here; nobody above sees this key
+    end
+    nothing
+end
+```
+
+The default `on_event!` is a no-op, so a widget only implements the
+events it cares about.
+
+## Capture, target, bubble
+
+`propagate!` walks the path from the root to the target and back:
+
+```julia
+using ManyUI
+
+mutable struct Trace <: ManyUI.Widget
+    node::WidgetNode
+    log::Vector{Tuple{Symbol,Phase.T}}
+end
+Trace(name::Symbol, log) = Trace(WidgetNode(; id = name), log)
+
+function ManyUI.on_event!(w::Trace, d::Dispatch{KeyEvent})
+    push!(w.log, (ManyUI.id(w), d.phase))
+    nothing
+end
+
+log = Tuple{Symbol,Phase.T}[]
+root, mid, leaf = Trace(:root, log), Trace(:mid, log), Trace(:leaf, log)
+mount!(root, mid)
+mount!(mid, leaf)
+
+propagate!(root, leaf, key('a'))
+log
+```
+
+The root and mid see the key on the way down, the target sees it as
+`AT_TARGET`, and the walk unwinds back up. The target is visited
+exactly once.
+
+## Consumption
+
+`consume!(d)` ends propagation immediately. Anything that has not yet
+been visited never sees the event — that is how a focused input
+swallows a keystroke a global binding would otherwise act on.
+
+```julia
+empty!(log)
+
+function ManyUI.on_event!(w::Trace, d::Dispatch{KeyEvent})
+    push!(w.log, (ManyUI.id(w), d.phase))
+    ManyUI.id(w) === :mid && consume!(d)
+    nothing
+end
+
+consumed = propagate!(root, leaf, key('a'))
+(consumed = consumed, visited = log)
+```
+
+`mid` consumed the key during capture, so `leaf` was never reached and
+no bubble phase ran.
+
+## Routing
+
+`dispatch_event!` picks the target before propagating, by event class:
+
+| Event | Target |
+|:--|:--|
+| `MouseEvent` | the widget under the pointer, else the root |
+| `KeyEvent`, `PasteEvent` | the focused widget, else the root |
+| `ResizeEvent`, `FocusEvent`, `TickEvent` | the root |
+| `RefreshEvent`, `QuitEvent` | not routed; these are App-level only |
+
+Mouse events find their target by hit testing, which returns the
+deepest visible widget under the point. Because paint order is document
+order, a later sibling covers an earlier one — and `hit_test` honours
+that, so a click always reaches what the user can actually see.
+
+```julia
+using ManyUI
+
+ui = Container(Label("title"; id = :t), Button("OK", identity; id = :ok))
+layout!(ui, Region(1, 1, 20, 4))
+
+r = region(query_one(ui, "#ok"))
+hit_test(ui, r.x, r.y) === query_one(ui, "#ok")
+```
+
+## Focus
+
+`focusable_widgets` is the tab order: every visible, focusable widget
+in pre-order. Hiding a subtree removes it from the order entirely.
+
+```julia
+app = App(ui, HeadlessDriver(Size(20, 4)))
+focus_next!(app)
+ManyUI.id(focused(app))
+```
+
+## Callback names
+
+Interactive widgets use the same callback vocabulary on every backend:
+
+| Callback | Meaning |
+|:--|:--|
+| `on_click` | a `Button` was activated |
+| `on_change` | a value, cursor, or selection changed |
+| `on_submit` | the current value or selection was submitted |
+| `on_focus` | the widget gained focus |
+| `on_blur` | the widget lost focus |
+
+`List`, `Table`, `DataTable`, and `TreeView` fire `on_change` only when
+their cursor or selection really moves. Pressing `enter` fires
+`on_submit`; it does not manufacture a second change.
+
+Focus callbacks live on every widget's `WidgetNode`, so they also work for
+widgets with specialized focus rendering:
+
+```julia
+field = TextInput()
+node(field).on_focus = w -> println("entered ", id(w))
+node(field).on_blur = w -> println("left ", id(w))
+```
+
+## Where events come from
+
+Events are parsed from a byte stream by `InputParser`, which is
+deliberately source-agnostic: it never touches `stdin`. A tty driver
+feeds it bytes read from the terminal; the web bridge feeds it bytes
+that arrived over a WebSocket. Both produce identical events.
+
+The parser is incremental and keeps partial state, so a sequence split
+across two reads parses the same as one delivered whole:
+
+```julia
+using ManyUI
+
+whole = InputParser()
+split = InputParser()
+
+all_at_once = feed!(whole, Vector{UInt8}("\e[A"))       # up arrow
+byte_at_a_time = vcat((feed!(split, [b]) for b in Vector{UInt8}("\e[A"))...)
+
+all_at_once == byte_at_a_time
+```
+
+That property is what makes the web target possible without ManyUI
+knowing the web exists.
+
+<!-- source: widgets.md -->
+
+## Widgets
+
+## Widgets
+
+```@meta
+CurrentModule = ManyUI
+```
+
+ManyUI ships a small library of built-in widgets. They are ordinary
+widgets with no privileged access: anything they do, your own widget
+types can do too.
+
+## Label
+
+Wrapping text. It measures and paints through `wrap_width` and
+`write_text!`, never through `Base.textwidth`, so a wide grapheme that
+would straddle the right edge moves to the next line rather than being
+cut in half.
+
+```julia
+using ManyUI
+
+l = Label("Hello, ManyUI!")
+measure(l, Size(40, 4))
+```
+
+Its text is reactive: assigning to it marks the label dirty for layout,
+because new text wraps differently and can move its siblings.
+
+```julia
+l.text[] = "Some considerably longer text that will wrap"
+measure(l, Size(20, 4))
+```
+
+## Container
+
+A box that holds children, optionally with a border and a title. It is
+the workhorse of layout — give it a `layout:` and a `gap:` and it
+arranges whatever you put in it.
+
+```julia
+ui = Container(Label("first"), Label("second"))
+layout!(ui, Region(1, 1, 20, 6))
+length(children(ui))
+```
+
+## Button
+
+A focusable, clickable widget that calls its callback when pressed —
+whether by mouse, routed through hit testing, or by ENTER when it holds
+focus.
+
+Wiring one to a `Label` gives a counter, and shows the reactive loop
+end to end: the callback writes the label's text, the write marks it
+dirty, and the next frame repaints it.
+
+```julia
+clicks = Ref(0)
+readout = Label("Count: 0"; id = :count)
+
+b = Button("Click me", _ -> begin
+               clicks[] += 1
+               readout.text[] = "Count: $(clicks[])"
+               nothing
+           end; id = :go)
+
+root = Container(readout, b)
+layout!(root, Region(1, 1, 20, 4))
+
+r = region(b)
+for _ in 1:3
+    dispatch_event!(root, MouseEvent(MouseAction.PRESS, MouseButton.LEFT,
+                                     r.x, r.y, MOD_NONE))
+end
+
+(clicks = clicks[], text = readout.text[])
+```
+
+A button also fires on ENTER when it holds focus, so the same counter
+works without a mouse:
+
+```julia
+dispatch_event!(root, parse(KeyEvent, "enter"), b)
+readout.text[]
+```
+
+`is_focusable(b)` is true, so it takes part in the tab order:
+
+```julia
+is_focusable(b)
+```
+
+## Scrollpane
+
+A window over exactly one child, for content bigger than the room you
+have. Wrap several children in a `Container`, as CSS makes you.
+
+The offset lives on the tree, not in the pane — so a wheel tick marks
+`Dirty.PAINT` and layout never runs. `viewport(pane)` is the node that
+scrolls, and it is what the scrolling API takes:
+
+```julia
+lines = Container([Static("line $i") for i in 1:8]...)
+pane = Scrollpane(lines)
+apply_stylesheet!(STYLESHEET_EMPTY, pane)
+layout!(pane, Region(1, 1, 9, 3))
+
+vp = viewport(pane)
+(window = layout_of(vp).content.height, content = content_extent(vp).height)
+```
+
+Eight rows of content in a three-row window, so five rows can scroll
+past. `scroll_to!` clamps and returns what it actually stored:
+
+```julia
+(max = max_scroll(vp), stored = scroll_to!(vp, Offset(0, 99)))
+```
+
+The wheel, the arrows, `pageup`/`pagedown` and `home`/`end` all work,
+and a pane at its limit does not consume the event — so it bubbles to
+the pane outside it and scroll chaining costs no code at all.
+[Scrolling](scrolling.md) covers the whole story.
+
+## Scrollbar
+
+The visible indicator for one axis. It is a sibling of what it reports
+on, never a child, so it never scrolls with the content — and it is
+parametric on its viewport, so one `Scrollbar` serves a `Container`, a
+`Scrollpane`'s canvas or a `TextArea` alike. It reads three functions
+and touches nothing else.
+
+`Scrollpane` builds its own, but the geometry is a pure function you can
+check on its own — `(start, len)` on the track, for a window over some
+content at an offset:
+
+```julia
+thumb_span(3, 3, 8, 0)
+```
+
+## TextInput
+
+Single-line entry, with a caret, a placeholder and a submit handler. It
+takes the width it is offered and scrolls horizontally rather than
+resizing, so a keystroke costs zero layout.
+
+```julia
+field = TextInput("hi", i -> nothing; placeholder = "name?")
+insert_text!(field, "!")
+(text = field.text[], cursor = field.cursor[])
+```
+
+The cursor is a 0-based count of **grapheme clusters**, so it steps over
+a wide emoji in one move and never lands inside one.
+
+## TextArea
+
+Multi-line entry over a `Vector{String}`. It scrolls by indexing its
+lines, so painting is O(window) and a huge document costs the same frame
+as a small one.
+
+```julia
+notes = TextArea("alpha\nbeta")
+insert_newline!(notes)
+(text = text(notes), extent = content_extent(notes))
+```
+
+It overrides `content_extent`, which is the whole of its integration
+with `Scrollbar`. [Text entry](textentry.md) covers both widgets, and
+the grapheme rules they are built on.
+
+## MinSizeOverlay
+
+The "Increase Terminal Size" screen. When the rendering area drops
+below the root's minimum, the App suspends normal rendering and paints
+this instead — no layout of your tree runs at all until there is room
+for it again.
+
+```julia
+should_suspend(Size(12, 3), Size(20, 5))
+```
+
+```julia
+should_suspend(Size(80, 24), Size(20, 5))
+```
+
+You rarely construct it yourself; `AppConfig(; min_size = ...)` decides
+when it appears.
+
+```julia
+OVERLAY_MIN_SIZE
+```
+
+Below a certain size even the overlay cannot be laid out, so a
+tree-free painter takes over. The framework never crashes because the
+window got small.
+
+## List, Table and DataTable
+
+The data widgets, covered in full on the [Data widgets](@ref) page.
+`List` shows items, `Table` shows columns, `DataTable` also sorts.
+
+```julia
+l = List(["alpha", "beta", "gamma"])
+(rows = row_count(l), nodes = length(descendants(l)))
+```
+
+`nodes` is zero, and stays zero at a hundred thousand items: unlike
+every other widget here, their rows are **data rather than widgets**, so
+a frame costs the same however much data you hand them.
+
+## Writing your own
+
+A widget is a mutable struct holding a `WidgetNode`, plus whatever
+state it needs:
+
+```julia
+using ManyUI
+
+mutable struct Spinner <: ManyUI.Widget
+    node::WidgetNode
+    frame::Int
+end
+Spinner() = Spinner(WidgetNode(; type_name = :Spinner), 1)
+
+const FRAMES = ('|', '/', '-', '\\')
+
+ManyUI.measure(w::Spinner, avail::Size) = Size(1, 1)
+
+## In ManyUITUI or a specific projection, you would implement render!:
+## function ManyUITUI.render!(w::Spinner, buf::AbstractMatrix{Cell})
+##     write_text!(buf, 1, 1, string(FRAMES[w.frame]), STYLE_NONE)
+##     nothing
+## end
+```
+
+Two methods make it real: `measure`, which reports how much room it
+wants, and `render!`, which paints into the content box it was granted.
+The buffer's `(1, 1)` is the content origin, and its size is the
+content box — so a widget cannot paint outside its own region, and
+`type_name` makes it addressable from CSS as `Spinner { ... }`.
+
+## Readouts
+
+Three widgets for showing a number without spending a node on each part
+of it.
+
+### Sparkline
+
+A one-row plot, one cell per sample:
+
+```julia
+using ManyUI
+
+sp = Sparkline([1, 3, 2, 5, 4]; cap = 240)
+push_value!(sp, 6)
+(n_values(sp), spark_bounds(sp))
+```
+
+The series is *data*, not a widget per point — the same seam `List` and
+the table widgets use. A 10 000-sample series is one node, and a frame
+costs the width of the widget rather than the length of the series,
+because only the last `width` samples can be on screen. New data
+arrives on the right; the oldest scrolls off the left. `cap` bounds a
+live series so it cannot grow without limit.
+
+`lo` and `hi` fix the scale, and fixing it is the point: auto-scaling
+redraws the same series differently the moment one outlier arrives,
+which is exactly when a reader most needs the picture to hold still. A
+value outside a fixed scale is pinned to the end it overshot rather
+than dropped.
+
+### StatusBar
+
+```julia
+bar = StatusBar(; left = "server :2828",
+                  center = RichText("running", Style(fg = rgb(0, 200, 0))),
+                  right = "[q]uit")
+status_layout(bar, 60)
+```
+
+Three segments on one row. It is a widget rather than three `Static`s
+in a flex row for one reason: **what it drops when it does not fit**.
+Flex would shrink all three and leave three half-truncated fragments. A
+`StatusBar` drops the centre first, then the right, and truncates the
+left only when it is alone and still too wide — the left segment is
+where an application puts its identity, so it is the one that survives.
+`status_layout` is pure, so you can test the rule without a buffer.
+
+### ProgressList
+
+A column of captioned bars:
+
+```julia
+pl = ProgressList([ProgressItem("build", 0.4),
+                   ProgressItem("test", 0.9)])
+set_progress!(pl, 1, 0.75)
+(n_items(pl), pl_label_width(pl))
+```
+
+A row is *not* a widget — the seam `List` and the table widgets already
+take. A hundred tasks are a `Vector` of a hundred items and one node;
+composing this out of a hundred `ProgressBar`s would put a hundred
+nodes on the tree to show a hundred numbers. It overrides
+`content_extent`, so a `Scrollbar` reports on it with no new code.
+
+The label column's `AUTO` width measures *every* item, unlike a table's
+`AUTO` column, which samples. The costs differ: a caption is short and
+a progress list is a handful of rows, where a table guards against a
+hundred thousand. Sampling here would let the column change width as
+the list scrolled, and every bar would jump sideways.
+
+### A labelled ProgressBar is a gauge
+
+```julia
+ProgressBar(0.62; label = "62% — 1.4 GB/s")
+```
+
+A field rather than a second widget, because a `Gauge` would differ
+from a `ProgressBar` by exactly that one. A labelled bar cannot use the
+block glyphs — text written over `█` is unreadable — so it fills with a
+reversed span, which keeps the boundary legible *through* the caption.
+
+## Markdown
+
+```julia
+using ManyUI
+
+pane = MarkdownPane("""
+    # Title
+
+    Some **bold** text and `code`.
+
+    - one
+    - two
+    """)
+length(md_lines(pane, 40))
+```
+
+The document is parsed by the `Markdown` stdlib; this widget only
+*projects* it — AST to a `Vector{RichText}`. That projection is the
+whole reason rich text had to come first: a heading is not a widget, a
+bold run is not a widget, and a document is not a subtree. It is lines,
+held as data, in one node.
+
+The heading, code, quote and link styles name theme tokens, so a
+document tracks the palette instead of being rebuilt for it. A link
+renders its *text*, never its URL — a pane is for reading.
+
+### Two things worth knowing
+
+**The line cache is keyed on the width.** Everything about a rendered
+document depends on where it wraps, so `md_lines(pane, w)` rebuilds
+when `w` changes and returns the same vector when it does not.
+Rebuilding unconditionally would reflow the whole document once a
+frame; not rebuilding would show the previous box's breaks in the new
+one.
+
+**A code block is never wrapped.** A broken line of code is a different
+line of code, so it is left long and the pane scrolls sideways instead.
+
+## Modal dialogs
+
+A popup is already a second root painted over the tree and hit-tested
+before it. `modal = true` is what turns one into a dialog:
+
+```julia
+using ManyUI, ManyUITUI
+
+content = Container(Button("OK", _ -> nothing),
+                    Button("Cancel", _ -> nothing);
+                    title = "Discard changes?")
+
+open_popup!(app, Popup(content, owner, Size(30, 5);
+                       placement = PopupPlacement.CENTER,
+                       modal = true))
+```
+
+What makes it modal is not its size or its placement — it is that the
+user cannot walk around the question. Three things, and each is a way
+out that had to be closed:
+
+- **A press outside does not dismiss it.** The popup layer dismisses an
+  ordinary popup on exactly that press, so this is carved out of it. A
+  dialog the application cannot proceed without must not be answerable
+  by clicking next to it.
+- **TAB does not leave it.** `focus_root(app)` returns the modal's
+  content instead of the tree, so the tab order is the dialog's.
+- **A keystroke does not reach the tree behind it.** The same root is
+  used to dispatch keys.
+
+A non-modal popup keeps all three behaviours of the tree — a `DropDown`
+holds focus itself and forwards to its list, which is why the trap asks
+about `modal` and not merely about there being a popup.
+
+Opening a modal moves focus into it and closing puts it back where it
+was, provided that widget is still in the tree.
+
+### Dialog
+
+`Dialog` is **not** a new widget type. A dialog is a captioned
+`Container` holding a message and a row of buttons, and every part of
+that already exists:
+
+```julia
+msg = "Discard changes?"
+d = Dialog(msg; title = "Confirm",
+           buttons = ["OK"     => (_ -> close_popup!(app, owner)),
+                      "Cancel" => (_ -> close_popup!(app, owner))])
+
+open_popup!(app, Popup(d, owner, dialog_size(msg; title = "Confirm");
+                       placement = PopupPlacement.CENTER, modal = true))
+```
+
+What did not already exist is the arrangement and the *size* — the
+popup layer takes a declared size rather than measuring its content, so
+guessing one line for a long question shows as a clipped one.
+`dialog_size` wraps the message to the width it settles on and reports
+the height it will actually need.
+
+Modality is not part of `Dialog` either. `Popup(...; modal = true)`
+supplies it, because it is a property of the layer, not of what is on
+it.
+
+### Dimming
+
+A modal dims everything it covers before painting itself. `Attr.DIM`
+and not an opaque fill, deliberately: dimming keeps the tree readable
+underneath, which is what tells the user the application is still there
+and merely waiting. A fill would say it had gone.
+
+<!-- source: scrolling.md -->
+
+## Scrolling
+
+## Scrolling
+
+```@meta
+CurrentModule = ManyUI
+```
+
+Scrolling in ManyUI is not a widget. Every `WidgetNode` carries a
+`scroll::Offset`, and `paint!` accumulates it down the tree and applies
+it to that node's **children**. `compute_layout` never reads the field.
+
+That single fact is the whole design: the `LayoutMap` is *invariant*
+under scrolling, so a wheel tick is a repaint and never a relayout. A
+`Scrollpane` is policy over a compositor that already knows how to shift
+an origin — where the offset may go, who moves it, and what the
+indicator looks like.
+
+## Scrollpane
+
+A `Scrollpane` is a window over exactly **one** child. Mount several by
+wrapping them in a `Container`, exactly as CSS makes you.
+
+Here is a twelve-line document in an eight-row window, painted through a
+`HeadlessDriver` — no tty, no terminal, the full pipeline:
+
+```julia
+using ManyUI
+
+log = Container([Static("line $i"; id = Symbol("line$i")) for i in 1:12]...)
+pane = Scrollpane(log; id = :log)
+
+driver = HeadlessDriver(Size(24, 8))
+app = App(pane, driver)
+frame!(app)                # cascade, layout, paint, diff, emit
+app.back                   # the frame just painted
+```
+
+Four lines never fit, and the bar on the right says so: a five-cell
+thumb on an eight-cell track is `8 / 12` of the document, drawn to
+scale.
+
+`viewport(pane)` is the node that actually scrolls — the pane's internal
+canvas. It is what `scroll_to!`, `max_scroll` and `content_extent` take:
+
+```julia
+vp = viewport(pane)
+(window = layout_of(vp).content,      # what you can see
+ content = content_extent(vp),        # what there is
+ max = max_scroll(vp))                # how far it can go
+```
+
+The window and the content extent are two different numbers, and a pane
+can scroll exactly when they differ. `content_extent` is the bounding
+box of the laid-out children's margin boxes, read straight from the
+`LayoutMap` the engine already computed — no re-measure, no relayout.
+
+## A wheel tick is a repaint, not a relayout
+
+Feed the app a wheel event and watch what it dirties:
+
+```julia
+before = layout_of(vp)
+
+handle!(app, MouseEvent(MouseAction.PRESS, MouseButton.WHEEL_DOWN,
+                        1, 1, MOD_NONE))
+
+(scroll = scroll_of(vp),
+ paint = is_dirty(vp, Dirty.PAINT),
+ layout = is_dirty(vp, Dirty.LAYOUT),
+ relayout_root = dirty_root(pane),   # nothing: relayout! returns at once
+ boxes_moved = layout_of(vp) !== before)
+```
+
+`Dirty.PAINT` and nothing else. `dirty_root` finds no real layout work,
+so `relayout!` returns on its first line and every box in the tree keeps
+the value it had. The next frame simply paints the same boxes at a
+different origin:
+
+```julia
+frame!(app)
+app.back
+```
+
+Three rows moved up, the thumb moved down, and the diff sent only the
+cells that changed. This matters more than it looks: a `Container` is
+auto-sized, so a layout mark would promote all the way to the root — a
+full-tree relayout per wheel notch.
+
+Layout and paint disagree about where a scrolled widget is, and that is
+deliberate: `region(w)` is where layout put it, `painted_region(w)` is
+where it ended up.
+
+```julia
+sixth = children(log)[6]
+(laid_out = region(sixth),
+ painted = painted_region(sixth),
+ shift = paint_offset(sixth))
+```
+
+`hit_test` compares the pointer against `painted_region`, so a click
+lands on what the user can actually see rather than on whatever occupies
+that widget's unscrolled slot.
+
+```julia
+ManyUI.id(hit_test(pane, 1, 1))
+```
+
+## Wheel and keyboard
+
+`Scrollpane` handles `MouseEvent` and `KeyEvent`:
+
+| Input | Effect |
+|:--|:--|
+| wheel up/down | `wheel_step` cells vertically (default 3) |
+| wheel left/right, or `shift`+wheel | `wheel_step_x` cells (default 6) |
+| `up` / `down` / `left` / `right` | `wheel_step` cells |
+| `pageup` / `pagedown` | one window less one row, so a landmark stays |
+| `home` / `end` | the extremes of the vertical axis |
+
+Each of those returns whether the event was consumed:
+
+```julia
+scroll_to!(vp, ORIGIN)
+
+(down = dispatch_event!(pane, parse(KeyEvent, "down")),
+ to_the_end = dispatch_event!(pane, parse(KeyEvent, "end")),
+ end_again = dispatch_event!(pane, parse(KeyEvent, "end")),
+ scroll = scroll_of(vp))
+```
+
+The second `end` returns `false`: the pane was already at its limit, so
+it did not move and **did not consume** the event. That rule is the
+whole of scroll chaining — a pane at its end lets the notch bubble to
+the next pane out, and no pane needs to know another exists.
+
+Keys are handled on the way up and only when unmodified, so a focused
+`TextInput` consuming `left`/`right` at target takes precedence with no
+special-casing anywhere, and `ctrl+a` still reaches your own bindings.
+
+## Clamping
+
+Clamping is split across two layers, on purpose.
+
+`set_scroll!` is the core mutator. It clamps at **zero** per axis and
+nothing more — it cannot see the content extent from where it lives:
+
+```julia
+(changed = set_scroll!(vp, Offset(0, -5)), stored = scroll_of(vp))
+```
+
+`scroll_to!` owns the upper bound, because it can ask `content_extent`.
+It clamps to `0:max_scroll(w)` and returns the offset **actually
+stored**:
+
+```julia
+(asked_for = Offset(0, 999), stored = scroll_to!(vp, Offset(0, 999)))
+```
+
+Returning the stored offset is what lets a caller detect "this pane is
+at its limit" with `scroll_to!(w, o) === before`. `scroll_by!` is the
+same thing relative to the current offset.
+
+Both are built from two pure functions you can call yourself, and which
+every scrolling widget shares so they cannot disagree:
+
+```julia
+(clamped = clamp_scroll(99, 4, 12),        # window 4, content 12
+ minimal = scroll_into_view(0, 4, 7, 7))   # show row 7 in a 4-row window
+```
+
+`clamp_scroll` is the definition of "in range". `scroll_into_view` moves
+the **minimum** needed: content already visible does not move at all,
+and an item taller than the window shows its top rather than its bottom.
+
+## Scrolling something into view
+
+`scroll_into_view!(vp, w)` scrolls `vp` the minimum needed to bring a
+descendant's margin box inside its content box. It reads unshifted
+layout geometry, so it is correct whatever the current offset is, and
+idempotent.
+
+You rarely call it. `on_focus!` defaults to `reveal!(w)`, which asks
+every ancestor — nearest first — to reveal `w` through the
+`reveal_child!` hook, and `Scrollpane` implements that hook. So tabbing
+to a widget buried in nested panes scrolls it into view with no wiring
+at the call site and no `isa Scrollpane` anywhere in the core:
+
+```julia
+buttons = Container([Button("B$i", b -> nothing) for i in 1:8]...)
+p2 = Scrollpane(buttons; bar_y = ScrollMode.NEVER)
+apply_stylesheet!(STYLESHEET_EMPTY, p2)
+layout!(p2, Region(1, 1, 9, 3))
+
+on_focus!(children(buttons)[8])          # what TAB does
+scroll_of(viewport(p2))
+```
+
+Nearest-first is load-bearing: an inner pane must finish moving before
+an outer pane can measure where the widget ended up. If your widget
+overrides `on_focus!`, it must call `reveal!(w)` itself — overriding
+replaces the default. `TextInput` and `TextArea` are the worked
+examples.
+
+## The Scrollbar
+
+A `Scrollbar` is an ordinary widget, parametric on the thing it reports
+on, and a **sibling** of the canvas rather than a child of it — so it is
+never inside a scrolled subtree and never shifts with the content.
+
+It knows nothing about `Scrollpane`. It reads three functions and
+nothing else:
+
+```
+content_extent(w)::Size      -- how big the content is
+layout_of(w).content::Region -- how big the window is
+scroll_of(w)::Offset         -- where the window currently is
+```
+
+That seam is three functions rather than a supertype, which is exactly
+why one `Scrollbar` serves a bare `Container`, a `Scrollpane`'s canvas
+and a `TextArea` — whose content is a `Vector{String}` and not children
+at all.
+
+The geometry is a pure function of four integers, so you can check it
+without a widget, a layout or a buffer:
+
+```julia
+[thumb_span(8, 8, 12, off) for off in 0:4]   # track, window, content
+```
+
+`(start, len)`, 1-based within the track. Two rules are normative: the
+thumb is **never** zero cells long — an invisible thumb is a broken
+scrollbar, and a one-cell thumb on a forty-cell track is the honest
+rendering of a forty-screen document — and the two ends are exact. At
+offset `0` the thumb starts at cell 1; at the maximum offset it ends on
+the last cell of the track. Those are the only two positions a user can
+verify at a glance, so the arithmetic is written around them.
+
+`ScrollMode` decides when the bar is drawn:
+
+| Mode | Gutter | Ink |
+|:--|:--|:--|
+| `ScrollMode.NEVER` | none | none — the wheel and keys still scroll |
+| `ScrollMode.AUTO` | always reserved | only when there is something to scroll |
+| `ScrollMode.ALWAYS` | always reserved | always, full-length when it all fits |
+
+`AUTO` reserves the gutter **unconditionally** and toggles only the ink.
+This is CSS's `scrollbar-gutter: stable`, not `overflow: auto`, and the
+reason is oscillation: removing the gutter rewraps the content, which
+may then no longer overflow, which brings the gutter back. The price is
+one wasted column on a pane that does not overflow. Take it.
+
+## `overflow: scroll` on any node
+
+`overflow` is a `BoxStyle` field on every node and `css.jl` already
+parses it, so a design where the property silently did nothing unless
+the widget happened to be a `Scrollpane` would make the stylesheet lie.
+Any node can carry an offset — it is CSS's `scrollTop` and `scrollLeft`:
+
+```julia
+using ManyUI
+
+sheet = css"""
+#box { overflow: scroll; }
+#doc { shrink: 0; }
+"""
+
+doc = Container([Static("row $i") for i in 1:5]...; id = :doc)
+box = Container(doc; id = :box)
+apply_stylesheet!(sheet, box)
+layout!(box, Region(1, 1, 6, 2))
+
+(window = layout_of(box).content,
+ content = content_extent(box),
+ max = max_scroll(box))
+```
+
+```julia
+scroll_to!(box, Offset(0, 2))
+buf = Buffer(6, 2)
+clear!(buf)
+paint!(buf, box)
+buf
+```
+
+`shrink: 0` on the document is not decoration and it is the trap worth
+knowing about: the default `shrink` is `1`, so the flex kernel absorbs
+the overflow and squeezes a five-row document into a two-row window —
+after which there is nothing left to scroll. `Scrollpane` sets it for
+you on an internal holder node, which is why it works out of the box.
+
+`Overflow` and `ScrollMode` are deliberately different axes of choice.
+`Overflow` is a clipping policy owned by the box model — `HIDDEN` and
+`SCROLL` both clamp the child clip to the content box, `VISIBLE` lets a
+child spill. `ScrollMode` is a scrollbar visibility policy owned by the
+widget. Neither implies the other: `ScrollMode.NEVER` still scrolls.
+
+## Writing a scrolling widget
+
+Store the offset in `node(w).scroll` through `set_scroll!` or
+`scroll_to!`, and nothing else writes the field.
+
+A node's scroll shifts its **children** and never its own render frame.
+That is what keeps `size(buf)` inside `render!` equal to the widget's
+real content box, invariant under scroll — so a scrolled `Label` does
+not rewrap and a scrolled `Button` does not re-centre. A widget with no
+children that scrolls its own content reads `scroll_of(w)` in its own
+`render!` and slices explicitly; `TextArea` does exactly that, which is
+also how it stays O(window) instead of O(document).
+
+Override `content_extent` when your content is data rather than
+children, and a `Scrollbar` will report on it with no further code.
+
+When a genuinely clipped node paints, `paint!` hands `render!` a
+`ScrolledView` rather than a `BufferView`: a window whose local origin
+and writable clip are independent, where the clip is the only authority
+and the frame is only a coordinate system. Writes outside the clip are
+silently dropped and reads return `CELL_BLANK`, so a widget cannot paint
+outside its box even if it tries — and a wide grapheme that would
+straddle a clip edge is dropped whole rather than halved, at the left
+edge as well as the right.
+
+<!-- source: textentry.md -->
+
+## Text entry
+
+## Text entry
+
+```@meta
+CurrentModule = ManyUI
+```
+
+Two widgets: `TextInput` for one line, `TextArea` for many. They share a
+discipline rather than a supertype — the same cursor units, the same
+clamps, the same grapheme rules — and they differ exactly where a line
+break makes them differ.
+
+## TextInput
+
+A single-line field with a placeholder, change and submit handlers, and a
+caret:
+
+```julia
+using ManyUI
+
+submitted = String[]
+field = TextInput("", i -> push!(submitted, i.text[]);
+                  on_change = i -> println("now: ", i.text[]),
+                  placeholder = "name?", id = :name)
+apply_stylesheet!(STYLESHEET_EMPTY, field)
+layout!(field, Region(1, 1, 10, 1))
+
+buf = Buffer(10, 1)
+clear!(buf)
+paint!(buf, field)
+buf
+```
+
+The placeholder shows while the text is empty, and it is painted dimmed
+rather than as content:
+
+```julia
+has(buf[1, 1].style, Attr.DIM)
+```
+
+Type into it and press `enter`:
+
+```julia
+for c in "ada"
+    dispatch_event!(field, key(c), field)
+end
+dispatch_event!(field, parse(KeyEvent, "enter"), field)
+
+(text = field.text[], cursor = field.cursor[], submitted = submitted)
+```
+
+`text` and `cursor` are `Reactive`, but with `Dirty.PAINT` rather than
+the conservative `Dirty.LAYOUT` default — and that is a design
+commitment, not an optimisation. `measure` is text-independent:
+
+```julia
+measure(field, Size(30, 9))
+```
+
+A `TextInput` takes the width it is offered and is always one row tall,
+so it never resizes to its content — that is what its horizontal scroll
+is for. A keystroke provably cannot move a single box, so a keystroke
+costs **zero** layout. Do not copy the `PAINT` choice to a widget whose
+size depends on its state; there it would be a correctness bug.
+
+Give it a narrow box with `width: 20` if you want one.
+
+## TextArea
+
+A multi-line editor over a `Vector{String}`:
+
+```julia
+notes = TextArea("alpha\nbeta")
+apply_stylesheet!(STYLESHEET_EMPTY, notes)
+layout!(notes, Region(1, 1, 10, 3))
+
+insert_text!(notes, "X")
+insert_newline!(notes)
+(text = text(notes), line = notes.line, col = notes.col)
+```
+
+`measure` returns everything it is offered:
+
+```julia
+measure(notes, Size(30, 9))
+```
+
+An auto-height `TextArea` would be as tall as its document and would
+never scroll at all, so give it a `height: 10` or a `grow: 1` parent.
+
+It scrolls by **indexing** its lines rather than by shifting an origin:
+`render!` touches `scroll.y + 1 : scroll.y + height` and nothing else,
+so painting is O(window) and a 100 000-line document costs the same
+frame as a ten-line one.
+
+The document is a plain field, deliberately not a `Reactive`: an `==`
+guard over a `Vector{String}` would be an O(n) elementwise compare on
+every keystroke, and an in-place edit would never trip it anyway.
+`version` is the reactive cell instead — an `Int` compare, O(1), for the
+O(1) edit that actually happened. The price is worth stating plainly:
+**mutate `lines` behind `version`'s back and it will not repaint**, so
+every edit goes through the operations below.
+
+`content_extent` is overridden to report the document rather than the
+(nonexistent) children, and that override is the whole of its
+integration with the scrolling machinery. A `Scrollbar` reports on a
+`TextArea` with no new code at all:
+
+```julia
+using ManyUI
+
+area = TextArea(join(["line $i" for i in 1:20], "\n"); id = :area)
+bar = Scrollbar(area, ScrollAxis.VERTICAL; id = :bar)
+row = Container(area, bar; id = :row)
+
+apply_stylesheet!(css"""
+                  #row  { display: flex; layout: row; }
+                  #area { grow: 1; }
+                  #bar  { width: 1; shrink: 0; }
+                  """, row)
+layout!(row, Region(1, 1, 10, 4))
+
+(content = content_extent(area), window = layout_of(area).content)
+```
+
+```julia
+scroll_to!(area, Offset(0, 8))
+buf = Buffer(10, 4)
+clear!(buf)
+paint!(buf, row)
+buf
+```
+
+`Scrollpane(TextArea(...))` is also legal and scrolls the area's whole
+box — the two mechanisms compose rather than compete. But a `TextArea`
+contains no `Scrollpane`, and never should: a pane scrolls *children*,
+so a 10 000-line document would become 10 000 widgets.
+
+## The cursor
+
+The caret is **reverse video on the cell it rests on**, not a hardware
+cursor: the tree paints into a `Buffer`, and the `Driver` seam has no
+cursor-placement method at all. It appears while the widget is focused.
+
+Cursor indices are 0-based and count **grapheme clusters**: `0` is
+before the first cluster and `n` is after the last. This is not a
+violation of the package's 1-based rule — that rule governs `Region`,
+`Buffer` and `MouseEvent`, and a cursor is none of those. It is a count
+of what lies behind the caret, which makes `0:n` the natural range and
+both ends legal split points.
+
+| Widget | Cursor |
+|:--|:--|
+| `TextInput` | `cursor[]`, a cluster index in `0:n` |
+| `TextArea` | `line` (1-based into `lines`) and `col` (a cluster index) |
+
+`TextArea` also keeps a `goal` column, in **cells**, which `up` and
+`down` aim for and which every horizontal move re-pins. Cells are the
+unit the user can see; a goal measured in graphemes would land in a
+visually different column across wide clusters. Its absence is the
+single most-noticed bug in a text editor — run down through a short line
+and back up, and the caret comes home:
+
+```julia
+g = TextArea("aaaaaaaa\nbb\ncccccccc")
+apply_stylesheet!(STYLESHEET_EMPTY, g)
+layout!(g, Region(1, 1, 10, 3))
+
+move_by!(g, 6)                              # line 1, cell column 6
+down1 = (move_line!(g, 1), g.col)           # line 2 is only 2 wide
+down2 = (move_line!(g, 1), g.col)           # line 3 is wide again
+(goal = g.goal, down1 = down1, down2 = down2)
+```
+
+`move_line!` lands on the cluster whose prefix width is the largest not
+exceeding `goal`, so `up`/`down` can never come to rest *inside* a wide
+cluster.
+
+## Editing keys
+
+Both widgets act on the way up, on unmodified keys only, and consume
+what they act on.
+
+| Key | `TextInput` | `TextArea` |
+|:--|:--|:--|
+| a character, `space` | insert at the caret | insert at the caret |
+| `enter` | calls `on_submit` | splits the line |
+| `backspace` | delete the cluster before | at column 0: join the line above |
+| `delete` | delete the cluster at | at end of line: join the line below |
+| `left` / `right` | one cluster | one cluster, wrapping across lines |
+| `up` / `down` | — | one line, aiming at `goal` |
+| `pageup` / `pagedown` | — | one window less one row |
+| `home` / `end` | start / end of the text | start / end of the **line** |
+| `tab`, `escape` | fall through | fall through |
+| `ctrl+…`, `alt+…` | fall through | fall through |
+
+`tab` and `escape` falling through is what keeps the tab order alive,
+and modified keys falling through is what stops a focused field silently
+shadowing your application bindings:
+
+```julia
+box = TextInput("x")
+(tab = dispatch_event!(box, parse(KeyEvent, "tab"), box),
+ letter = dispatch_event!(box, parse(KeyEvent, "a"), box),
+ ctrl_a = dispatch_event!(box, parse(KeyEvent, "ctrl+a"), box),
+ text = box.text[])
+```
+
+Only the plain letter was consumed, and only it was inserted.
+
+Every key has a function behind it, so you never need to synthesise
+events to drive a field: `insert_text!`, `insert_newline!`,
+`backspace!`, `delete_forward!`, `move_by!`, `move_to!` (`TextInput`),
+`move_line!` (`TextArea`), plus `set_text!`, `text` and
+`refresh_extent!` on `TextArea`.
+
+`home` and `end` are `move_to!` with the extremes of `Int` and let the
+clamp decide — "go as far as you can" *is* the implementation. In a
+`TextArea` they are per **line**, because that is what a caret in an
+editor means; a `Scrollpane`'s document-wide `home`/`end` still reaches
+an ancestor pane whenever the area is not focused.
+
+`TextArea` keeps `widest` as a monotone high-water mark, raised in O(1)
+by every edit and lowered by nothing. The tradeoff, stated so nobody has
+to discover it: after you delete the longest line the horizontal range
+stays too wide — the thumb is slightly too small — until
+`refresh_extent!` rescans. Paying O(lines) per keystroke to save a
+scrollbar thumb one cell is not a trade worth making. `set_text!` calls
+it for you.
+
+## Paste
+
+A `PasteEvent` arrives whole, from bracketed paste, and the two widgets
+treat it differently because their content differs.
+
+`TextInput` strips newlines and every other control character: a
+single-line field has nowhere to put a line break, and silently
+accepting one would make its text unrenderable.
+
+```julia
+one = TextInput()
+dispatch_event!(one, PasteEvent("one\ntwo"), one)
+one.text[]
+```
+
+`TextArea` splits it into real lines — it is exactly the widget a
+multi-line paste belongs in:
+
+```julia
+many = TextArea()
+dispatch_event!(many, PasteEvent("one\ntwo"), many)
+(text = text(many), lines = length(many.lines))
+```
+
+A paste that strips to nothing still consumes: it was a paste into this
+field, and letting the husk bubble would be a second delivery of the
+same event.
+
+## Grapheme correctness
+
+This is the section that matters, because it is the thing everyone else
+gets wrong.
+
+A terminal grid is not a string, and a user's text is not a sequence of
+codepoints. Take a ZWJ family emoji — man, zero-width joiner, woman,
+zero-width joiner, girl:
+
+```julia
+using ManyUI
+
+fam = "👨‍👩‍👧"
+(codepoints = length(collect(fam)),
+ bytes = ncodeunits(fam),
+ cells = grapheme_width(fam),
+ base_textwidth = textwidth(fam))
+```
+
+Five codepoints, eighteen bytes, **two cells** — and `Base.textwidth`
+says six, because it sums codepoints and knows nothing about clustering.
+It is forbidden throughout ManyUI's text handling for exactly that
+reason. (`textwidth("❤️")` is 1, for a cluster that renders in two: the
+error goes both ways.)
+
+The rule is: **a cursor steps by grapheme cluster.** One step, however
+many codepoints or cells that cluster is.
+
+```julia
+w = TextInput("a$(fam)b")
+move_to!(w, 0)                       # Home
+[move_by!(w, 1) for _ in 1:4]        # four presses of `right`
+```
+
+Three clusters — `a`, the whole family, `b` — and the fourth press
+saturates instead of running off the end. The family is **one step**,
+not five, and not eighteen.
+
+Now watch the same cluster occupy two cells. Put the caret on it, paint,
+and find the cell the caret reversed:
+
+```julia
+apply_stylesheet!(STYLESHEET_EMPTY, w)
+layout!(w, Region(1, 1, 8, 1))
+w.focused[] = true
+move_to!(w, 1)                       # the caret is ON the family
+
+buf = Buffer(8, 1)
+clear!(buf)
+paint!(buf, w)
+buf
+```
+
+```julia
+caret = findfirst(x -> has(buf[x, 1].style, Attr.REVERSE), 1:8)
+cell = buf[caret, 1]
+
+(column = caret,
+ glyph = String(cell.content),
+ cells = Int(cell.width),
+ next_is_continuation = is_continuation(buf[caret + 1, 1]))
+```
+
+One step of the cursor, one cell of caret, **two cells of grid** — and
+the continuation cell after it is intact. The caret reverses the *head*
+of a wide cluster and leaves its continuation a continuation, so the
+grid never desynchronises. A wide cluster that would straddle either
+edge of the window is dropped whole, never halved, at the left edge as
+well as the right.
+
+Deleting is the same rule. One `backspace` over the family takes all
+eighteen bytes of it, not the last codepoint:
+
+```julia
+move_to!(w, 2)                       # just past the family
+backspace!(w)
+(text = w.text[], cursor = w.cursor[])
+```
+
+The subtlest case is insertion, and it is why the caret is always
+**recomputed from the new prefix** and never advanced by the number of
+clusters inserted. Type a combining acute onto an `e`:
+
+```julia
+v = TextInput("e")
+move_to!(v, typemax(Int))            # End -- one cluster behind the caret
+insert_text!(v, "́")            # COMBINING ACUTE ACCENT
+
+(text = v.text[],
+ bytes = ncodeunits(v.text[]),       # was 1
+ cursor = v.cursor[],                # was 1
+ cells = grapheme_width(v.text[]))
+```
+
+The string grew by two bytes and the cluster count did **not** change:
+the mark merged into the `e`. A caret advanced by "one inserted cluster"
+would now sit past the end of a string that never grew. Recomputing is
+the only rule that is right for every input, which is why it is the only
+rule used.
+
+The same discipline runs all the way down: byte indices and cluster
+indices meet in exactly one place, a small set of shared helpers that
+`TextInput` defines and `TextArea` uses, so the two cannot drift apart —
+and no widget code indexes a user's string by byte.
+
+## Code, with highlighting
+
+`CodeEditor` is **not** a new widget type. It is a `TextArea` with a
+`highlight` field set, so every editing verb still applies — it *is*
+one:
+
+```julia
+using ManyUI
+
+e = CodeEditor("function f(x)\n    return x + 1\nend")
+length(code_lines(e))
+```
+
+`language = :julia` is the default and `:none` gives a plain
+`TextArea`; pass `highlight` for your own. A highlighter takes the
+**whole source** and returns one `RichText` per line.
+
+### Why whole-document
+
+Because a line is not a lexical unit. A triple-quoted string means line
+40 is only classifiable given lines 1 to 39, so a per-line highlighter
+colours the inside of a string as code. The result is cached against
+`TextArea.version`, which every edit already bumps — a keystroke costs
+one relex of the document, and a frame costs none.
+
+### Two behaviours worth relying on
+
+**Unlexable text is drawn plain, never refused.** Text under a cursor
+is invalid most of the time it is being typed; an editor that stopped
+drawing then would be unusable.
+
+**An unknown face is invisible, not wrong.** `CODE_FACES` maps a
+highlighter face to a themed style, and anything not named there falls
+back to the widget's own style.
+
+The built-in Julia highlighter uses the `JuliaSyntaxHighlighting`
+stdlib, so the lexer is the one Julia itself ships and ManyUI owns no
+tokeniser of its own.
+
+<!-- source: data.md -->
+
+## Data widgets
+
+## Data widgets
+
+```@meta
+CurrentModule = ManyUI
+```
+
+`List`, `Table` and `DataTable` display collections. Reach for `List`
+when you have items, `Table` when you have columns, and `DataTable` when
+you also need sorting.
+
+They differ from every other widget in one way that matters: **a row is
+not a widget**. A hundred-thousand-row table is a `Vector` of a hundred
+thousand elements and *zero* extra nodes in the tree.
+
+## Rows are data
+
+A widget per row would mean 100 000 `WidgetNode`s, a layout pass over
+all of them on every edit, and 100 000 `render!` dispatches per frame.
+Instead these widgets hold their rows as plain data, override
+[`content_extent`](@ref), and paint only the rows you can actually see.
+
+```julia
+using ManyUI
+
+small = List(["a", "b", "c"])
+big = List(["item $i" for i in 1:100_000])
+
+(small_nodes = length(descendants(small)),
+ big_nodes = length(descendants(big)))
+```
+
+Both are zero. The cost of a frame is proportional to the window, not to
+the data, so a 100 000-row list paints in the same time as a 3-row one.
+
+This is the same seam `TextArea` uses, which is why a
+[`Scrollbar`](@ref) works on any of them with no special-casing —
+`Scrollbar` is parametric on the thing it reports about, and these
+widgets simply override `content_extent` to say how big their data is.
+
+## List
+
+A scrollable, focusable list. Items are whatever you like; `format`
+turns one into a string.
+
+```julia
+using ManyUI
+
+l = List(["alpha", "beta", "gamma", "delta"])
+apply_stylesheet!(STYLESHEET_EMPTY, l)
+layout!(l, Region(1, 1, 12, 3))
+
+buf = Buffer(Size(12, 3))
+clear!(buf)
+paint!(buf, l)
+[join(String(buf.cells[x, y].content) for x in 1:12) for y in 1:3]
+```
+
+Three rows of window, four items: it paints the three it can show.
+
+The cursor moves with the arrows, `home`/`end` and `pageup`/`pagedown`,
+scrolling itself into view as it goes, and the wheel scrolls the list.
+Clicking a row selects it. `on_change` fires when the cursor or selection
+moves, and `on_submit` fires on `enter`:
+
+```julia
+List(["alpha", "beta"],
+     w -> println("submitted ", w.items[row_cursor(w)]);
+     on_change = w -> println("selected row ", row_cursor(w)))
+```
+
+Rows can be any type, with `format` doing the projection:
+
+```julia
+People = [(name = "Ada", born = 1815), (name = "Alan", born = 1912)]
+List(People; format = p -> "$(p.name) ($(p.born))") |> row_count
+```
+
+## Table
+
+Columns with headers. Each [`Column`](@ref) carries its caption, width
+and alignment:
+
+```julia
+using ManyUI
+
+rows = [("alice", 55), ("bob", 31), ("carol", 31)]
+cols = [Column("name"; width = cells(6)),
+        Column("age"; width = cells(4), align = Align.END)]
+
+t = Table(rows, cols)
+apply_stylesheet!(STYLESHEET_EMPTY, t)
+layout!(t, Region(1, 1, 12, 4))
+
+buf = Buffer(Size(12, 4))
+clear!(buf)
+paint!(buf, t)
+[join(String(buf.cells[x, y].content) for x in 1:12) for y in 1:4]
+```
+
+The header behaves asymmetrically on purpose: it stays put while the
+rows scroll under it, but follows the columns when you scroll sideways.
+A header that scrolled away vertically would be useless; one that did
+not move horizontally would lie about which column you are looking at.
+
+### Column widths
+
+A column width is a [`Length`](@ref), the same type the layout engine
+uses:
+
+| Width | Meaning |
+|:--|:--|
+| `cells(n)` | exactly `n` cells |
+| `pct(n)` | `n`% of the table |
+| `fr(n)` | weight `n` of the leftover space |
+| `AUTO` | sized to content |
+
+`AUTO` is the one with a catch. Sizing a column to its content means
+measuring rows, and measuring 100 000 of them every frame would undo the
+entire point of these widgets. So `AUTO` measures a **sample** of rows
+(`sample`, defaulting to `TC_AUTO_SAMPLE`) rather than all of them. It
+is a good guess, not a guarantee: a wide value outside the sample gets
+truncated rather than widening the column. Give a column an explicit
+width when you need certainty.
+
+## DataTable
+
+A `Table` that sorts. It needs a `key` telling it how to extract a
+sortable value from a row and a column index:
+
+```julia
+using ManyUI
+
+rows = [("carol", 31), ("alice", 55), ("bob", 31)]
+cols = [Column("name"; width = cells(6)), Column("age"; width = cells(4))]
+
+dt = DataTable(rows, cols; key = (r, j) -> r[j])
+apply_stylesheet!(STYLESHEET_EMPTY, dt)
+layout!(dt, Region(1, 1, 12, 4))
+
+sort_by!(dt, 1)          # by name, ascending
+
+buf = Buffer(Size(12, 4))
+clear!(buf)
+paint!(buf, dt)
+[join(String(buf.cells[x, y].content) for x in 1:12) for y in 1:4]
+```
+
+The `▲` marks the sorted column. [`toggle_sort!`](@ref) cycles a column
+between ascending and descending.
+
+### Sorting does not touch your data
+
+Two properties, both load-bearing.
+
+**Your vector is yours.** Sorting permutes an index, never the rows you
+handed over:
+
+```julia
+rows                       # untouched, still in its original order
+```
+
+[`source_index`](@ref) maps a displayed row back to where it came from,
+which is what you want when the user picks row 1 and you need to know
+*which* row that really is.
+
+**The sort is stable.** Rows with equal keys keep their relative order,
+so sorting by age here leaves `carol` before `bob` — the order they
+arrived in — rather than shuffling ties arbitrarily:
+
+```julia
+sort_by!(dt, 2)            # by age; 31 appears twice
+[(source_index(dt, k), rows[source_index(dt, k)]) for k in 1:view_count(dt)]
+```
+
+Sorting is `O(n log n)`, and it runs when you ask — never per frame.
+Painting a sorted table costs exactly what painting an unsorted one
+costs.
+
+## Cells and wide characters
+
+A value too wide for its column is truncated on a **grapheme boundary**,
+never mid-cluster. A CJK ideograph or an emoji occupies two cells, and a
+wide cluster that would straddle the column edge is dropped whole rather
+than sliced in half — a halved cluster would corrupt every column to its
+right.
+
+```julia
+using ManyUI
+(truncate_width("漢字テキスト", 5), text_width("漢字"))
+```
+
+This is why the framework has [`text_width`](@ref) and
+[`truncate_width`](@ref) and never uses `Base.textwidth`, which reports
+1 for an emoji that occupies 2 cells and 8 for a ZWJ family that
+occupies 2.
+
+## Scrolling them
+
+Each of these widgets scrolls itself, so a [`Scrollbar`](@ref) can
+report on one directly:
+
+```julia
+Container(my_list, Scrollbar(ScrollAxis.VERTICAL, my_list))
+```
+
+Wrapping one in a `Scrollpane` is also legal and scrolls the
+widget's whole box instead — the two mechanisms compose rather than
+compete.
+
+<!-- source: api/enums.md -->
+
+## Enumerations
+
+## Enumerations
+
+```@meta
+CurrentModule = ManyUI
+```
+
+Every finite value set in ManyUI is a module-scoped enum: a module
+holding an `@enum T` with `SCREAMING_SNAKE_CASE` values. They
+tab-complete (`ColorDepth.<TAB>`), discriminate by type
+(`d isa ColorDepth.T`), and keep their value names out of the package
+namespace.
+
+```@docs
+Align
+Attr
+BorderKind
+CheckState
+ColorDepth
+ColorKind
+Combinator
+Dimension
+Direction
+Dirty
+Display
+Justify
+Key
+Modifier
+MouseAction
+MouseButton
+Overflow
+Phase
+PopupPlacement
+ScrollAxis
+ScrollMode
+SelectorKind
+```
+
+<!-- source: api/geometry.md -->
+
+## Geometry and Unicode
+
+## Geometry and Unicode
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["geometry.jl", "unicode.jl", "types.jl"]
+```
+
+<!-- source: api/style.md -->
+
+## Color, style and CSS
+
+## Color, style and CSS
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["color.jl", "style.jl", "theme.jl", "richtext.jl", "css.jl"]
+```
+
+<!-- source: api/buffer.md -->
+
+## Buffer, diff and ANSI
+
+## Buffer, diff and ANSI
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["buffer.jl", "diff.jl", "ansi.jl"]
+```
+
+<!-- source: api/tree.md -->
+
+## Widget tree, box model and layout
+
+## Widget tree, box model and layout
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["widget.jl", "reactive.jl", "boxmodel.jl", "layout.jl", "paint.jl"]
+```
+
+<!-- source: api/events.md -->
+
+## Events, input and dispatch
+
+## Events, input and dispatch
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["events.jl", "src/input.jl", "dispatch.jl"]
+```
+
+<!-- source: api/drivers.md -->
+
+## Drivers
+
+## Drivers
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["driver.jl", "terminal.jl", "headless.jl"]
+```
+
+<!-- source: api/app.md -->
+
+## App and event loop
+
+## App and event loop
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["core.jl", "precompile.jl"]
+```
+
+## Preferences
+
+```@autodocs
+Modules = [ManyUITUI]
+Pages = ["prefs.jl"]
+```
+
+<!-- source: api/widgets.md -->
+
+## Built-in widgets
+
+## Built-in widgets
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["widgets/label.jl", "widgets/container.jl", "widgets/button.jl",
+         "widgets/overlay.jl"]
+```
+
+## Toggles
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["widgets/toggle.jl"]
+```
+
+## Tabs
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["widgets/tabs.jl"]
+```
+
+## Tree
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["widgets/tree.jl"]
+```
+
+
+## Splitter
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["widgets/splitter.jl"]
+```
+
+## Readouts
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["widgets/sparkline.jl", "widgets/statusbar.jl",
+         "widgets/progressbar.jl", "widgets/progresslist.jl",
+         "widgets/dialog.jl", "widgets/markdownpane.jl"]
+```
+
+<!-- source: api/inputs.md -->
+
+## Drop-down, forms and popups
+
+## Drop-down, forms and popups
+
+```@meta
+CurrentModule = ManyUI
+```
+
+## Drop-down
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["widgets/dropdown.jl"]
+```
+
+## Form
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["widgets/form.jl"]
+```
+
+## Popups
+
+A popup is a second root painted over the tree and hit-tested before it --
+the layer a [`DropDown`](@ref)'s list rides on. The `App` owns the one open
+popup; an owner opens it with `open_popup!` and is notified through
+`on_popup_close!`. Anchored controls use `BELOW`, `ABOVE`, or `AUTO` placement;
+modal dialogs use `PopupPlacement.CENTER` to ignore the owner geometry and
+center within the current viewport.
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["widgets/popup.jl", "popup_ops.jl"]
+```
+
+## Code editor
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["widgets/codeeditor.jl"]
+```
+
+<!-- source: api/scrolling.md -->
+
+## Scrolling widgets
+
+## Scrolling widgets
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["widgets/scroll.jl"]
+```
+
+<!-- source: api/text.md -->
+
+## Text entry widgets
+
+## Text entry widgets
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["widgets/textinput.jl", "widgets/textarea.jl"]
+```
+
+<!-- source: api/list.md -->
+
+## List
+
+## List
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["widgets/list.jl"]
+```
+
+<!-- source: api/tables.md -->
+
+## Table and DataTable
+
+## Table and DataTable
+
+```@autodocs
+Modules = [ManyUI]
+Pages = ["widgets/table.jl", "widgets/datatable.jl"]
+```

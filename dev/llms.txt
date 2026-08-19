@@ -1,0 +1,34 @@
+# ManyUI.jl
+
+> A Julia UI framework whose widget tree and model are written once and projected to several targets: a terminal, a browser, a Dear ImGui window, or a CLI.
+
+
+## Documentation
+
+- [Home](https://s-celles.github.io/ManyUIDoc.jl/dev/): Its philosophy is simple: write your domain model and UI presentation once, and render it anywhere.
+- [Concepts](https://s-celles.github.io/ManyUIDoc.jl/dev/concepts/): ManyUI borrows the browser's ideas and applies them to a grid of characters.
+- [Backends](https://s-celles.github.io/ManyUIDoc.jl/dev/backends/): A `Driver` makes targets swappable.
+- [Layout](https://s-celles.github.io/ManyUIDoc.jl/dev/layout/): The layout engine resolves a widget tree into an absolute `Region` for every node, using a box model deliberately close to CSS.
+- [Styling](https://s-celles.github.io/ManyUIDoc.jl/dev/styling/): Appearance is declarative.
+- [Events](https://s-celles.github.io/ManyUIDoc.jl/dev/events/): Input propagates through the widget tree in two phases, exactly as it does in a browser: down from the root to the target (capture), then back up (bubble), stopping the moment something consumes it.
+- [Widgets](https://s-celles.github.io/ManyUIDoc.jl/dev/widgets/): ManyUI ships a small library of built-in widgets.
+- [Scrolling](https://s-celles.github.io/ManyUIDoc.jl/dev/scrolling/): Scrolling in ManyUI is not a widget.
+- [Text entry](https://s-celles.github.io/ManyUIDoc.jl/dev/textentry/): Two widgets: `TextInput` for one line, `TextArea` for many.
+- [Data widgets](https://s-celles.github.io/ManyUIDoc.jl/dev/data/): `List`, `Table` and `DataTable` display collections.
+
+## API reference
+
+- [Enumerations](https://s-celles.github.io/ManyUIDoc.jl/dev/api/enums/): Every finite value set in ManyUI is a module-scoped enum: a module holding an `@enum T` with `SCREAMING_SNAKE_CASE` values.
+- [Geometry and Unicode](https://s-celles.github.io/ManyUIDoc.jl/dev/api/geometry/)
+- [Color, style and CSS](https://s-celles.github.io/ManyUIDoc.jl/dev/api/style/)
+- [Buffer, diff and ANSI](https://s-celles.github.io/ManyUIDoc.jl/dev/api/buffer/)
+- [Widget tree, box model and layout](https://s-celles.github.io/ManyUIDoc.jl/dev/api/tree/)
+- [Events, input and dispatch](https://s-celles.github.io/ManyUIDoc.jl/dev/api/events/)
+- [Drivers](https://s-celles.github.io/ManyUIDoc.jl/dev/api/drivers/)
+- [App and event loop](https://s-celles.github.io/ManyUIDoc.jl/dev/api/app/)
+- [Built-in widgets](https://s-celles.github.io/ManyUIDoc.jl/dev/api/widgets/)
+- [Drop-down, forms and popups](https://s-celles.github.io/ManyUIDoc.jl/dev/api/inputs/): A popup is a second root painted over the tree and hit-tested before it -- the layer a [`DropDown`](@ref)'s list rides on.
+- [Scrolling widgets](https://s-celles.github.io/ManyUIDoc.jl/dev/api/scrolling/)
+- [Text entry widgets](https://s-celles.github.io/ManyUIDoc.jl/dev/api/text/)
+- [List](https://s-celles.github.io/ManyUIDoc.jl/dev/api/list/)
+- [Table and DataTable](https://s-celles.github.io/ManyUIDoc.jl/dev/api/tables/)
