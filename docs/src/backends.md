@@ -160,17 +160,59 @@ ManyUI widget/model and canonical event contracts while using Dear ImGui for
 native rendering. Its headless driver is available without graphical system
 libraries, so backend and event tests can run in CI.
 
-The optional native window seam currently uses CImGui's GLFW/OpenGL3 backend:
+The optional native window seam currently uses CImGui's GLFW/OpenGL3 backend.
+It lives in a package extension whose triggers are **CImGui, GLFW, HarfBuzz
+and ModernGL** — all four. An extension fires only when every trigger is
+loaded, so installing three of them leaves the backend asleep and
+`launch_manyui` reaches a stub that throws:
 
 ```julia
 using Pkg
-Pkg.add(["ManyUICImGui", "CImGui", "GLFW", "ModernGL"])
+Pkg.add(["ManyUICImGui", "CImGui", "GLFW", "HarfBuzz", "ModernGL"])
 
 using ManyUI, ManyUICImGui
+import CImGui, GLFW, HarfBuzz, ModernGL   # wake the extension
+
+ManyUICImGui.native_available()           # true once it is awake
 
 ui() = Container(Label("Hello from ManyUI"))
 ManyUICImGui.launch_manyui(ui; width=900, height=600)
 ```
+
+!!! note "HarfBuzz needs a recent `HarfBuzz_jll`"
+    `libcimgui` calls `glfwGetPlatform`, which exists only in GLFW 3.4. A
+    `HarfBuzz_jll` bound that forces the 100.x series drags `GLFW_jll` back
+    to 3.3.9, where that symbol is missing, and the process dies with
+    `signal 11 (2): Segmentation fault: 11`. If that happens, check the
+    resolved `GLFW_jll` first — 3.3.9 is the symptom.
+
+### Running the ManyUI demos in a CImGui mode
+
+`ManyUIDemos` keeps the GPU stack out of its base environment, so the two
+CImGui modes run from the `CImGuiEnv` environment shipped beside it:
+
+```console
+$ just instantiate-cimgui                        # once
+$ just hub-cimgui                                # the hub, CImGui TUI
+$ just demo-cimgui gallery.jl cimguitui          # one demo
+```
+
+Asking for `cimgui`/`cimguitui` from the base environment prints what is
+missing and the command above rather than failing.
+
+### Closing the window
+
+The two paths end their window differently, and a launcher that offers both
+has to know which:
+
+* **`launch_tui`** runs a real ManyUI `App`, so `ManyUITUI.quit!(app)` is
+  enough — the render loop stops with the App and the window goes with it.
+* **`launch_manyui`** projects widgets straight into ImGui with no `App`
+  behind them. A callback that means "this window is done" has nothing to
+  quit, so it calls `ManyUICImGui.request_close!()` instead, which asks the
+  window that is currently rendering to close and returns whether there was
+  one. It never throws and returns `false` when the extension is asleep, so
+  code that runs under every backend can call it unconditionally.
 
 The initial projection covers `Container`, `Label`, `Static` and `Button`.
 Widget, layout, event, theme and animation parity is tracked in the
