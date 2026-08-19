@@ -29,6 +29,9 @@
 # 6. Documentation sources (docs/build/ is generated -- see 8)
 !/docs/Project.toml
 !/docs/make.jl
+# The llms.txt generator make.jl includes. Named like make.jl itself:
+# without it a clone has a make.jl that cannot run.
+!/docs/llms.jl
 !/docs/src/**/*.md
 !/docs/src/**/*.png
 !/docs/src/**/*.svg

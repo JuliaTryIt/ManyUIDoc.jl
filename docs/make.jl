@@ -2,6 +2,40 @@ using Documenter
 using ManyUI
 using ManyUITUI
 
+include(joinpath(@__DIR__, "llms.jl"))
+
+# The nav tree, named once: `makedocs` renders it and `write_llms`
+# indexes it, so a page cannot appear in one and be missing from the
+# other.
+const PAGES = [
+    "Home" => "index.md",
+    "Concepts" => "concepts.md",
+    "Backends" => "backends.md",
+    "Layout" => "layout.md",
+    "Styling" => "styling.md",
+    "Events" => "events.md",
+    "Widgets" => "widgets.md",
+    "Scrolling" => "scrolling.md",
+    "Text entry" => "textentry.md",
+    "Data widgets" => "data.md",
+    "API reference" => [
+        "api/enums.md",
+        "api/geometry.md",
+        "api/style.md",
+        "api/buffer.md",
+        "api/tree.md",
+        "api/events.md",
+        "api/drivers.md",
+        "api/app.md",
+        "api/widgets.md",
+        "api/inputs.md",
+        "api/scrolling.md",
+        "api/text.md",
+        "api/list.md",
+        "api/tables.md",
+    ],
+]
+
 DocMeta.setdocmeta!(ManyUI, :DocTestSetup, :(using ManyUI); recursive = true)
 DocMeta.setdocmeta!(ManyUITUI, :DocTestSetup, :(using ManyUITUI); recursive = true)
 
@@ -21,36 +55,22 @@ makedocs(;
         size_threshold_warn = 500 * 1024,
         size_threshold = 1024 * 1024,
     ),
-    pages = [
-        "Home" => "index.md",
-        "Concepts" => "concepts.md",
-        "Backends" => "backends.md",
-        "Layout" => "layout.md",
-        "Styling" => "styling.md",
-        "Events" => "events.md",
-        "Widgets" => "widgets.md",
-        "Scrolling" => "scrolling.md",
-        "Text entry" => "textentry.md",
-        "Data widgets" => "data.md",
-        "API reference" => [
-            "api/enums.md",
-            "api/geometry.md",
-            "api/style.md",
-            "api/buffer.md",
-            "api/tree.md",
-            "api/events.md",
-            "api/drivers.md",
-            "api/app.md",
-            "api/widgets.md",
-            "api/inputs.md",
-            "api/scrolling.md",
-            "api/text.md",
-            "api/list.md",
-            "api/tables.md",
-        ],
-    ],
+    pages = PAGES,
     checkdocs = :none,
     warnonly = false,
+)
+
+# llms.txt / llms-full.txt, written into the build directory Documenter
+# deploys verbatim, so they land at the site root.
+write_llms(;
+    srcdir = joinpath(@__DIR__, "src"),
+    builddir = joinpath(@__DIR__, "build"),
+    pages = PAGES,
+    sitename = "ManyUI.jl",
+    summary = "A Julia UI framework whose widget tree and model are written \
+               once and projected to several targets: a terminal, a browser, \
+               a Dear ImGui window, or a CLI.",
+    baseurl = "https://s-celles.github.io/ManyUIDoc.jl/dev",
 )
 
 if get(ENV, "CI", "false") == "true"
