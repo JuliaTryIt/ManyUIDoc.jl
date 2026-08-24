@@ -15,7 +15,7 @@ format, generated from the same page tree the nav is built from:
 
 - [`/llms.txt`](https://juliatryit.github.io/ManyUIDoc.jl/dev/llms.txt) — a curated
   index: one line per page, with a link and a one-sentence description.
-- [`/llms-full.txt`](https:/juliatryit.github.io/ManyUIDoc.jl/dev/llms-full.txt) —
+- [`/llms-full.txt`](https://juliatryit.github.io/ManyUIDoc.jl/dev/llms-full.txt) —
   every page inline, so a model needs no crawling and no search index.
 
 Both are written by `docs/llms.jl` at the end of `docs/make.jl`, into the
